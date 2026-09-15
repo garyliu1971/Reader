@@ -282,6 +282,68 @@ def load_html_file(path):
     chapters = scan_chapters(text)
     return text, chapters, title
 
+_MD_FENCE_RE = re.compile(r"^```")
+_MD_ATX_TITLE_RE = re.compile(r"^\s{0,3}#\s+(.+?)\s*#*\s*$")
+_MD_SETEXT_TITLE_RE = re.compile(r"^([^\n]+)\n(=+)\s*$", re.MULTILINE)
+_MD_HR_RE = re.compile(r"^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$")
+_MD_BULLET_RE = re.compile(r"^(\s*)[-*+]\s+")
+_MD_BLOCKQUOTE_RE = re.compile(r"^(\s*)>\s?")
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_MD_BOLD_RE = re.compile(r"(\*\*|__)(.+?)\1")
+_MD_EM_RE = re.compile(r"(\*|_)(.+?)\1")
+_MD_INLINE_CODE_RE = re.compile(r"`([^`]*)`")
+
+def _markdown_to_text(md: str):
+    """Markdown → (清理后正文, 标题)。零依赖正则转换：ATX 标题行原样保留
+    （供 scan_chapters/CHAPTER_RE 识别为章节），其余内联语法去除/替换为可读符号。"""
+    title = ""
+    m = _MD_ATX_TITLE_RE.match(next((ln for ln in md.splitlines() if ln.strip()), ""))
+    if m:
+        title = m.group(1).strip()
+    else:
+        m = _MD_SETEXT_TITLE_RE.search(md)
+        if m:
+            title = m.group(1).strip()
+
+    out_lines = []
+    in_fence = False
+    for line in md.splitlines():
+        if _MD_FENCE_RE.match(line.strip()):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            out_lines.append(line)
+            continue
+        if _MD_HR_RE.match(line):
+            out_lines.append("")
+            continue
+        if _MD_ATX_TITLE_RE.match(line) or re.match(r"^\s{0,3}#{1,6}[ \t]+\S", line):
+            out_lines.append(line)  # 保留原始标题行，供 CHAPTER_RE 识别
+            continue
+        line = _MD_BLOCKQUOTE_RE.sub(r"\1", line)
+        line = _MD_BULLET_RE.sub(r"\1• ", line)
+        line = _MD_IMAGE_RE.sub(lambda mm: f"[图片: {mm.group(1)}]" if mm.group(1) else "[图片]", line)
+        line = _MD_LINK_RE.sub(r"\1", line)
+        line = _MD_BOLD_RE.sub(r"\2", line)
+        line = _MD_EM_RE.sub(r"\2", line)
+        line = _MD_INLINE_CODE_RE.sub(r"\1", line)
+        out_lines.append(line)
+
+    text = "\n".join(out_lines)
+    text = re.sub(r"[ \t\r]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip(), title
+
+def load_markdown(path):
+    """Markdown 文件 → (清理后正文, 章节, 标题)。"""
+    with open(path, "rb") as f:
+        raw = f.read()
+    text = decode_text(raw)
+    text, title = _markdown_to_text(text)
+    chapters = scan_chapters(text)
+    return text, chapters, title
+
 def load_pdf(path):
     """解析 PDF（仅限有文字层的，不支持扫描版）→ (全文, 章节, 书名)。
     按原始页面逐页提取文字后拼接，不保留 PDF 原本的分页/排版 -- 交给
@@ -355,6 +417,9 @@ class BookLoader(QObject):
             elif ext == ".pdf":
                 self.progress.emit(10, "解析 PDF…")
                 text, chapters, title = load_pdf(self.path)
+            elif ext in (".md", ".markdown"):
+                self.progress.emit(10, "解析 Markdown…")
+                text, chapters, title = load_markdown(self.path)
             elif ext == ".kfx":
                 raise RuntimeError("暂不支持 KFX 格式，请先用 Calibre 转换为 EPUB 或 MOBI")
             else:
@@ -1251,7 +1316,7 @@ class MainWindow(QMainWindow):
     def open_book(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "打开小说", "",
-            "电子书 (*.txt *.md *.epub *.html *.htm *.mobi *.azw *.azw3 *.prc *.pdf);;文本 (*.txt *.md);;EPUB (*.epub);;Kindle (*.mobi *.azw *.azw3 *.prc);;网页 (*.html *.htm);;PDF (*.pdf)")
+            "电子书 (*.txt *.md *.markdown *.epub *.html *.htm *.mobi *.azw *.azw3 *.prc *.pdf);;文本 (*.txt *.md *.markdown);;EPUB (*.epub);;Kindle (*.mobi *.azw *.azw3 *.prc);;网页 (*.html *.htm);;PDF (*.pdf)")
         if path:
             self.load_book(path)
 
