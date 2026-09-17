@@ -1199,6 +1199,7 @@ def _pdf_build(pages, body, running):
     for pi, pg in enumerate(pages):
         ph = pg.get("height", 0.0)
         elems = []
+        tables = [{"bbox": bb, "rows": data, "inserted": False} for bb, data in pg.get("tables", [])]
         for ln in pg["lines"]:
             txt = _pdf_line_text(ln).strip()
             if not txt:
@@ -1208,9 +1209,19 @@ def _pdf_build(pages, body, running):
             y0 = ln["bbox"][1]
             if _PDF_PAGENO_RE.match(txt) and ph and (y0 < ph * 0.08 or y0 > ph * 0.9):
                 continue
+            x0, y0, x1, y1 = ln["bbox"]
+            table = next((item for item in tables
+                          if x1 > item["bbox"][0] and x0 < item["bbox"][2]
+                          and item["bbox"][1] <= (y0 + y1) / 2 <= item["bbox"][3]), None)
+            if table is not None:
+                if not table["inserted"]:
+                    elems.append(("table", y0, table["rows"]))
+                    table["inserted"] = True
+                continue
             elems.append(("line", y0, ln))
-        for (bb, data) in pg.get("tables", []):
-            elems.append(("table", bb[1], data))
+        for table in tables:
+            if not table["inserted"]:
+                elems.append(("table", table["bbox"][1], table["rows"]))
         for (iy, iid, iw, ih) in pg.get("images", []):
             elems.append(("image", iy, (iid, iw, ih)))
         elems.sort(key=lambda e: e[1])
