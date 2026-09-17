@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 from typing import List, Tuple, Optional
 
 from PySide6.QtCore import Qt, QRectF, QSizeF, QPointF, Signal, QObject, QTimer, QEvent, QBuffer, QByteArray, QIODevice
-from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QColor, QPen, QNativeGestureEvent, QBrush, QLinearGradient
+from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QColor, QPen, QNativeGestureEvent, QBrush, QLinearGradient, QPixmap
 try:
     from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
     _HAS_MULTIMEDIA = True
@@ -42,13 +42,15 @@ CLICK_ZONE = 0.28       # 单击左右两侧翻页的触发宽度（占窗口比
 # ============ 分页（只分"一章"的量，所以永远很快） ============
 class Line:
     __slots__ = ("text", "start", "end", "indent", "gap_after",
-                 "runs", "style", "marker", "height", "ascent", "map")
+                 "runs", "style", "marker", "height", "ascent", "map", "image")
     def __init__(self, text, start, end, indent=False, gap_after=0.0,
-                 runs=None, style=None, marker=None, height=None, ascent=None, map=None):
+                 runs=None, style=None, marker=None, height=None, ascent=None, map=None,
+                 image=None):
         self.text, self.start, self.end = text, start, end
         self.indent, self.gap_after = indent, gap_after
         self.runs, self.style, self.marker = runs, style, marker
         self.height, self.ascent, self.map = height, ascent, map
+        self.image = image
 
 class Page:
     __slots__ = ("index", "start", "end", "lines")
@@ -837,11 +839,13 @@ class LazyPager:
             p = self._params
             if self.pdf_blocks is not None:
                 max_w = p["page_size"].width() - 2 * p["margin_x"]
+                usable_h = p["page_size"].height() - 2 * p["margin_y"]
                 line_h = QFontMetricsF(p["font"]).height() * p["line_spacing"]
                 bs = [b for b in self.pdf_blocks if c.start <= b.get("start", 0) < c.end]
                 lines = render_pdf_lines(bs, p["font"], max_w, p["line_spacing"],
-                                         p.get("para_spacing", PARA_SPACING), line_h)
-                pages = _pack_lines(lines, p["page_size"].height() - 2 * p["margin_y"], line_h)
+                                         p.get("para_spacing", PARA_SPACING), line_h,
+                                         max_h=usable_h * 0.92)
+                pages = _pack_lines(lines, usable_h, line_h)
             elif self.md:
                 max_w = p["page_size"].width() - 2 * p["margin_x"]
                 line_h = QFontMetricsF(p["font"]).height() * p["line_spacing"]
@@ -1056,6 +1060,12 @@ def _pdf_drop_prefix(spans, n):
     return out
 
 _PDF_TABLE_BUDGET = 6.0   # 表格识别的总时间预算（秒），避免大部头 PDF 打开过慢
+_PDF_IMG_BUDGET = 12.0    # 插图提取总时间预算（秒）
+_PDF_IMG_MAX = 400        # 最多提取的插图数量
+_PDF_IMG_MIN = 24         # 最小边长（点），小于视为图标/线条
+_PDF_IMG_MAX_AREA = 0.85  # 超过页面面积此比例的图（整页背景/扫描）不提取
+_PDF_IMG_ZOOM_MAX = 2.0
+_PDF_IMG_TARGET_W = 1400  # 插图渲染目标宽度（像素）
 
 def _pdf_extract(path, progress=None):
     import warnings
@@ -1074,8 +1084,11 @@ def _pdf_extract(path, progress=None):
         except Exception:
             toc = []
         pages = []
+        images = {}
+        img_seq = 0
         n = len(doc)
         tbl_deadline = time.time() + _PDF_TABLE_BUDGET
+        img_deadline = time.time() + _PDF_IMG_BUDGET
         for pno in range(n):
             if progress and (pno % 20 == 0 or pno == n - 1):
                 progress(15 + int(55 * pno / max(1, n)), "解析 PDF 版式… %d/%d 页" % (pno + 1, n))
@@ -1106,10 +1119,39 @@ def _pdf_extract(path, progress=None):
                             tables.append((tuple(t.bbox), [[(c or "").strip() for c in row] for row in data]))
                 except Exception:
                     pass
-            pages.append({"lines": lines, "tables": tables, "height": float(page.rect.height)})
+            # 插图：按位置框渲染成 PNG（保留原分辨率，最高 2x）
+            page_imgs = []
+            if time.time() < img_deadline and img_seq < _PDF_IMG_MAX:
+                try:
+                    pw, ph = float(page.rect.width), float(page.rect.height)
+                    page_area = max(1.0, pw * ph)
+                    for info in page.get_image_info(xrefs=True):
+                        bb = info.get("bbox")
+                        if not bb:
+                            continue
+                        x0, y0, x1, y1 = [float(v) for v in bb]
+                        w, h = x1 - x0, y1 - y0
+                        if w < _PDF_IMG_MIN or h < _PDF_IMG_MIN:
+                            continue
+                        if w * h > page_area * _PDF_IMG_MAX_AREA:
+                            continue
+                        zoom = max(1.0, min(_PDF_IMG_ZOOM_MAX, _PDF_IMG_TARGET_W / max(1.0, w)))
+                        pix = page.get_pixmap(clip=pymupdf.Rect(x0, y0, x1, y1),
+                                              matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+                        if pix.width < 8 or pix.height < 8:
+                            continue
+                        images[img_seq] = (pix.tobytes("png"), pix.width, pix.height)
+                        page_imgs.append((y0, img_seq, pix.width, pix.height))
+                        img_seq += 1
+                        if img_seq >= _PDF_IMG_MAX or time.time() >= img_deadline:
+                            break
+                except Exception:
+                    pass
+            pages.append({"lines": lines, "tables": tables, "images": page_imgs,
+                          "height": float(page.rect.height)})
     finally:
         doc.close()
-    return title, toc, pages
+    return title, toc, pages, images
 
 def _pdf_body_size(pages):
     hist = {}
@@ -1169,6 +1211,8 @@ def _pdf_build(pages, body, running):
             elems.append(("line", y0, ln))
         for (bb, data) in pg.get("tables", []):
             elems.append(("table", bb[1], data))
+        for (iy, iid, iw, ih) in pg.get("images", []):
+            elems.append(("image", iy, (iid, iw, ih)))
         elems.sort(key=lambda e: e[1])
         # 页内正文左边距与行距中位数（用于段落切分）
         body_xs, body_x1s, gaps, prev_bottom = [], [], [], None
@@ -1191,6 +1235,14 @@ def _pdf_build(pages, body, running):
         right = max(body_x1s) if body_x1s else 0.0
 
         for (k, _y, obj) in elems:
+            if k == "image":
+                if para is not None and para["spans"]:
+                    blocks.append(para)
+                para, prev = None, None
+                iid, iw, ih = obj
+                blocks.append({"type": "image", "img_id": iid, "img_w": iw,
+                               "img_h": ih, "page": pi})
+                continue
             if k == "table":
                 if para is not None and para["spans"]:
                     blocks.append(para)
@@ -1460,7 +1512,24 @@ def _render_pdf_table(blk, font, max_w, line_h, para_gap):
     return _table_lines(hprep, rprep, blk.get("align") or [], 0, blk["start"], blk["start"],
                         font, max_w, line_h, para_gap)
 
-def render_pdf_lines(blocks, font, max_w, line_spacing, para_spacing, line_h):
+def _render_pdf_image(blk, max_w, max_h, line_h):
+    iw, ih = blk.get("img_w", 0), blk.get("img_h", 0)
+    if iw <= 0 or ih <= 0:
+        return []
+    dw = max_w
+    dh = dw * ih / iw
+    if max_h and dh > max_h:
+        dh = max_h
+        dw = dh * iw / ih
+    if dw > max_w:
+        dw = max_w
+        dh = dw * ih / iw
+    ln = Line("", blk["start"], blk["start"], indent=0.0, style="image",
+              height=dh, ascent=0.0, image=(blk["img_id"], dw, dh))
+    ln.gap_after = line_h * 0.6
+    return [ln]
+
+def render_pdf_lines(blocks, font, max_w, line_spacing, para_spacing, line_h, max_h=None):
     """把 PDF 版式块渲染成带样式与源偏移映射的 Line 列表（偏移为绝对）。"""
     fm = QFontMetricsF(font)
     para_gap = fm.height() * para_spacing
@@ -1475,6 +1544,8 @@ def render_pdf_lines(blocks, font, max_w, line_spacing, para_spacing, line_h):
             out.extend(_render_pdf_list(b, font, max_w, line_h, para_gap))
         elif t == "table":
             out.extend(_render_pdf_table(b, font, max_w, line_h, para_gap))
+        elif t == "image":
+            out.extend(_render_pdf_image(b, max_w, max_h, line_h))
         else:
             out.extend(_render_pdf_para(b, font, max_w, line_h, para_gap))
     return out
@@ -1486,7 +1557,7 @@ def load_pdf(path, progress=None):
         import pymupdf  # noqa: F401
     except Exception as e:
         raise RuntimeError("未安装 PyMuPDF，请执行：pip install pymupdf") from e
-    title, toc, pages = _pdf_extract(path, progress)
+    title, toc, pages, images = _pdf_extract(path, progress)
     if not any(pg["lines"] for pg in pages):
         raise RuntimeError("此 PDF 没有可提取的文字层（可能是扫描版/图片 PDF，暂不支持，需要 OCR）")
     body = _pdf_body_size(pages)
@@ -1495,7 +1566,7 @@ def load_pdf(path, progress=None):
     text, blocks = _pdf_serialize(blocks)
     page_offsets = _pdf_page_offsets(blocks, len(pages))
     chapters = _pdf_chapters(blocks, toc, text, page_offsets)
-    return text, chapters, title, {"blocks": blocks}
+    return text, chapters, title, {"blocks": blocks, "images": images}
 
 def load_kindle(path):
     """解析 Kindle 格式（mobi/azw/azw3/prc）→ (全文, 章节, 书名)。
@@ -1849,6 +1920,8 @@ class PageView(QWidget):
     def __init__(self):
         super().__init__()
         self.pages: List[Page] = []
+        self.pdf_images = {}      # img_id -> PNG 字节（PDF 插图）
+        self._img_cache = {}      # img_id -> QPixmap（懒解码 + LRU）
         self.full_text = ""
         self.font = QFont(); self.font.setPointSize(16)
         self.line_spacing = LINE_SPACING
@@ -2017,6 +2090,32 @@ class PageView(QWidget):
                            QPointF(x + w, y + asc + fmm.descent() * 0.4))
             x += w
 
+    def _pixmap_for(self, iid):
+        pm = self._img_cache.get(iid)
+        if pm is not None:
+            return pm
+        data = self.pdf_images.get(iid)
+        if not data:
+            return None
+        pm = QPixmap()
+        if not pm.loadFromData(data):
+            return None
+        self._img_cache[iid] = pm
+        if len(self._img_cache) > 48:      # LRU：超限淘汰最旧的
+            for k in list(self._img_cache.keys())[:-32]:
+                self._img_cache.pop(k, None)
+        return pm
+
+    def _draw_image(self, p, ln, tx, max_w, y):
+        iid, dw, dh = ln.image
+        pm = self._pixmap_for(iid)
+        if pm is None or pm.isNull():
+            p.setPen(QPen(QColor(MD_HR_COLOR), 1))
+            p.drawRect(QRectF(tx, y, max_w, dh))
+            return
+        ix = tx + max(0.0, (max_w - dw) / 2.0)      # 居中
+        p.drawPixmap(QRectF(ix, y, dw, dh), pm, QRectF(pm.rect()))
+
     def _draw_page(self, p, rect, page, header_text):
         # 四周轻微投影，模拟书页浮在深色桌面上
         for i in (6, 4, 2):
@@ -2055,8 +2154,11 @@ class PageView(QWidget):
                 p.setFont(lfont)
                 p.setPen(QColor(self.text_color))
                 p.drawText(QPointF(line_x - lfm.horizontalAdvance(ln.marker) - 8.0, y + asc), ln.marker)
+            # 插图
+            if ln.style == "image" and ln.image:
+                self._draw_image(p, ln, tx, max_w, y)
             # 正文
-            if ln.text:
+            elif ln.text:
                 if ln.runs:
                     self._draw_runs(p, ln, lfont, line_x, y, asc)
                 else:
@@ -2538,6 +2640,8 @@ class MainWindow(QMainWindow):
         if is_md:
             chapters = md_chapters(text)
         pdf_blocks = extra.get("blocks") if isinstance(extra, dict) else None
+        self.view.pdf_images = (extra.get("images") if isinstance(extra, dict) else None) or {}
+        self.view._img_cache.clear()
         self.pager = LazyPager(text, chapters, md=is_md, pdf_blocks=pdf_blocks)
         self.pager.set_params(self.view.pagination_params())
         self.view.full_text = text
