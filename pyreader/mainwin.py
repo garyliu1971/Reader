@@ -1,6 +1,7 @@
 import os
 import re
 import threading
+from typing import Optional
 from PySide6.QtCore import Qt, QTimer, QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QMainWindow, QWidget, QListWidget, QListWidgetItem,
@@ -16,7 +17,7 @@ from .loader import BookLoader
 from .view import PageView
 from .settings import SettingsDialog
 from .ai import translate, lookup, AiWorker
-from .tts import TtsWorker, TranslateWorker, split_sentences
+from .tts import TtsWorker, TranslateWorker, split_sentences, TTS_DEFAULT_VOICE, _log_tts
 
 # ============ 主窗口 ============
 class MainWindow(QMainWindow):
