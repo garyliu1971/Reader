@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
     def open_book(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "打开小说", "",
-            "电子书 (*.txt *.md *.markdown *.epub *.html *.htm *.mobi *.azw *.azw3 *.prc *.pdf);;文本 (*.txt *.md *.markdown);;EPUB (*.epub);;Kindle (*.mobi *.azw *.azw3 *.prc);;网页 (*.html *.htm);;PDF (*.pdf)")
+            "电子书 (*.txt *.md *.markdown *.epub *.html *.htm *.mobi *.azw *.azw3 *.prc *.pdf *.docx);;文本 (*.txt *.md *.markdown);;EPUB (*.epub);;Kindle (*.mobi *.azw *.azw3 *.prc);;网页 (*.html *.htm);;PDF (*.pdf);;Word (*.docx)")
         if path:
             self.load_book(path)
 

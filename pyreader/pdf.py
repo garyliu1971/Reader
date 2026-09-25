@@ -622,6 +622,11 @@ def _render_pdf_para(blk, font, max_w, line_h, para_gap):
     fm = QFontMetricsF(font)
     asc = fm.ascent()
     wrapped = _wrap_pieces(blk["pieces"], max_w, font)
+    if not wrapped:
+        # 空段落（docx 里的空行）→ 渲染成单个空行，保留段落间距
+        ln = Line("", blk["start"], blk["start"], indent=0.0, height=line_h, ascent=asc)
+        ln.gap_after = para_gap
+        return [ln]
     lines = [_line_from_pieces(w, (w[0][2] if w else blk["start"]),
                                (w[-1][3] if w else blk["start"]),
                                indent=0.0, height=line_h, ascent=asc) for w in wrapped]

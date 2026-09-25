@@ -66,7 +66,11 @@ class LazyPager:
                 max_w = p["page_size"].width() - 2 * p["margin_x"]
                 usable_h = p["page_size"].height() - 2 * p["margin_y"]
                 line_h = QFontMetricsF(p["font"]).height() * p["line_spacing"]
-                bs = [b for b in self.pdf_blocks if c.start <= b.get("start", 0) < c.end]
+                if c.end == len(self.text):
+                    # 文档末尾的图片等无文本块（start == len(text)）也要归入最后一章
+                    bs = [b for b in self.pdf_blocks if c.start <= b.get("start", 0) <= c.end]
+                else:
+                    bs = [b for b in self.pdf_blocks if c.start <= b.get("start", 0) < c.end]
                 lines = render_pdf_lines(bs, p["font"], max_w, p["line_spacing"],
                                          p.get("para_spacing", PARA_SPACING), line_h,
                                          max_h=usable_h * 0.92)
