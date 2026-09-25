@@ -4,6 +4,8 @@ import sys, json, re, os, threading, bisect, urllib.request, asyncio, time, zipf
 from urllib.parse import unquote, urlparse
 import xml.etree.ElementTree as ET
 from typing import List, Tuple, Optional
+import numpy as np
+from PIL import Image
 
 from PySide6.QtCore import Qt, QRectF, QSizeF, QPointF, Signal, QObject, QTimer, QEvent, QBuffer, QByteArray, QIODevice, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QColor, QPen, QNativeGestureEvent, QBrush, QLinearGradient, QPixmap, QTransform, QRadialGradient, QPainterPath
@@ -39,7 +41,7 @@ INDENT_SPACES = 2       # 段落首行缩进（中文字符数）
 PARA_SPACING = 0.5      # 段落间距（行高的倍数）
 CLICK_ZONE = 0.28       # 单击左右两侧翻页的触发宽度（占窗口比例）
 FLIP_MS = 380            # 3D 翻页动画时长（毫秒）
-FLIP_PERSPECTIVE = 3.2   # 翻页透视强度（相机距离 = 页宽 × 该系数，越小越夸张）
+FLIP_PERSPECTIVE = 5.0   # 翻页透视强度（相机距离 = 页宽 × 该系数，越小越夸张/文字越压缩）
 
 # ============ 分页（只分"一章"的量，所以永远很快） ============
 class Line:
@@ -2258,7 +2260,8 @@ class PageView(QWidget):
         q.end()
         return pm
 
-    def _start_flip(self, target, direction):
+    def _prepare_flip(self, direction):
+        """构建翻页所需的快照与几何状态（翻动页来自当前 spread，不改变 spread）。"""
         self._flip_from = self.spread
         self._flip_dir = 1 if direction > 0 else -1
         left, right = self.page_rects()
@@ -2277,6 +2280,9 @@ class PageView(QWidget):
             back = self.pages[2 * f - 1] if 2 * f - 1 >= 0 else None
             self._flip_snaps['front'] = self._flip_snapshot(left, front, self._header_for(2 * f), self._spine_side(2 * f))
             self._flip_snaps['back'] = self._flip_snapshot(left, back, self._header_for(2 * f - 1), self._spine_side(2 * f - 1))
+
+    def _start_flip(self, target, direction):
+        self._prepare_flip(direction)
         self._flip_t = 0.0
         self._flip_anim = QVariantAnimation(self)
         self._flip_anim.setStartValue(0.0)
@@ -2302,16 +2308,52 @@ class PageView(QWidget):
         self.pageChanged.emit(self.left_page_offset())
         self.update()
 
+    def _warp_page(self, pm, mirror, pivot_x, cy, fx, hs, W, H):
+        """用 Pillow 做单次透视扭曲（整页一次性采样，无条带接缝）。
+        返回 (QPixmap, bbox_x, bbox_y)；失败返回 (None, 0, 0)。"""
+        try:
+            img = pm.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+            arr = np.frombuffer(img.constBits(), np.uint8).reshape(
+                img.height(), img.bytesPerLine())[:, :img.width() * 4].reshape(img.height(), img.width(), 4)
+            pil = Image.fromarray(arr, 'RGBA')
+            if mirror:
+                pil = pil.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+            quad = QPolygonF([QPointF(pivot_x, cy - H / 2.0), QPointF(fx, cy - hs / 2.0),
+                              QPointF(fx, cy + hs / 2.0), QPointF(pivot_x, cy + H / 2.0)])
+            unit = QTransform()
+            QTransform.squareToQuad(quad, unit)
+            S = QTransform(); S.scale(1.0 / W, 1.0 / H)
+            inv = (unit * S).inverted()[0]
+            xs = [quad[0].x(), quad[1].x(), quad[2].x(), quad[3].x()]
+            ys = [quad[0].y(), quad[1].y(), quad[2].y(), quad[3].y()]
+            x0 = int(min(xs)); x1 = int(max(xs)); y0 = int(min(ys)); y1 = int(max(ys))
+            if x1 - x0 < 2 or y1 - y0 < 2:
+                return None, 0, 0
+            m11, m12, m13, m21, m22, m23, m31, m32, m33 = (
+                inv.m11(), inv.m12(), inv.m13(), inv.m21(), inv.m22(),
+                inv.m23(), inv.m31(), inv.m32(), inv.m33())
+            dc = m13 * x0 + m23 * y0 + m33
+            a = m11 / dc; b = m21 / dc; c = (m11 * x0 + m21 * y0 + m31) / dc
+            d_ = m12 / dc; e = m22 / dc; f = (m12 * x0 + m22 * y0 + m32) / dc
+            g = m13 / dc; h = m23 / dc
+            warped = pil.transform((x1 - x0 + 1, y1 - y0 + 1), Image.Transform.PERSPECTIVE,
+                                   (a, b, c, d_, e, f, g, h), Image.Resampling.BILINEAR,
+                                   fillcolor=(0, 0, 0, 0))
+            wa = np.ascontiguousarray(warped)
+            data = wa.tobytes()
+            qimg = QImage(data, wa.shape[1], wa.shape[0], wa.shape[1] * 4, QImage.Format.Format_RGBA8888)
+            return QPixmap.fromImage(qimg), x0, y0
+        except Exception:
+            return None, 0, 0
+
     def _draw_turning_page(self, p):
-        """逐条带 + 双三角形仿射，绘制带透视的翻动页。
-        Qt 光栅引擎不原生支持图像的透视映射，需分三角形逼近（关闭抗锯齿消除接缝）。"""
+        """绘制带透视的翻动页：整页用 Pillow 一次性透视扭曲（无条带接缝、文字更清晰）。"""
         t = self._flip_t
         front = t < 0.5
         pm = self._flip_snaps.get('front' if front else 'back')
         if pm is None or pm.isNull():
             return
-        if (front and self._flip_dir < 0) or (not front and self._flip_dir > 0):
-            pm = QPixmap.fromImage(pm.toImage().mirrored(True, False))
+        mirror = (front and self._flip_dir < 0) or (not front and self._flip_dir > 0)
 
         rect = self._flip_rect
         W = rect.width(); H = rect.height()
@@ -2333,56 +2375,30 @@ class PageView(QWidget):
         fx = pivot_x + d * W * c * (D / den)         # 自由边屏幕 x
         if abs(fx - pivot_x) < 1.0:                  # 页面侧立，几乎不可见
             return
+        hs = H * D / den                             # 自由边投影高度
 
-        N = max(24, min(72, int(W // 7)))
-        dx = W / N
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)   # 关键：避免条带接缝
-        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        for i in range(N):
-            u0 = i / N; u1 = (i + 1) / N
-            d0 = D - W * u0 * s; d1 = D - W * u1 * s
-            if d0 <= 0.0: d0 = 0.001
-            if d1 <= 0.0: d1 = 0.001
-            x0 = pivot_x + d * W * u0 * c * (D / d0)
-            x1 = pivot_x + d * W * u1 * c * (D / d1)
-            h0 = H * D / d0; h1 = H * D / d1
-            yt0 = cy - h0 / 2.0; yt1 = cy - h1 / 2.0
-            yb0 = cy + h0 / 2.0; yb1 = cy + h1 / 2.0
-            sx = i * dx
-            # 双三角形：A=(p0,p1,p2)，B=(p1,p3,p2)
-            for (t0, t1, t2, s0, s1, s2) in (
-                ((x0, yt0), (x1, yt1), (x0, yb0), (sx, 0), (sx + dx, 0), (sx, H)),
-                ((x1, yt1), (x1, yb1), (x0, yb0), (sx + dx, 0), (sx + dx, H), (sx, H)),
-            ):
-                exx = s1[0] - s0[0]; exy = s1[1] - s0[1]
-                eyx = s2[0] - s0[0]; eyy = s2[1] - s0[1]
-                det = exx * eyy - exy * eyx
-                if abs(det) < 1e-9:
-                    continue
-                a11 = ((t1[0] - t0[0]) * eyy - (t2[0] - t0[0]) * eyx) / det
-                a21 = (-(t1[0] - t0[0]) * exy + (t2[0] - t0[0]) * exx) / det
-                a12 = ((t1[1] - t0[1]) * eyy - (t2[1] - t0[1]) * eyx) / det
-                a22 = (-(t1[1] - t0[1]) * exy + (t2[1] - t0[1]) * exx) / det
-                tx = t0[0] - a11 * s0[0] - a21 * s0[1]
-                ty = t0[1] - a12 * s0[0] - a22 * s0[1]
-                M = QTransform(a11, a12, a21, a22, tx, ty)
-                clip = QPainterPath()
-                clip.moveTo(s0[0], s0[1]); clip.lineTo(s1[0], s1[1]); clip.lineTo(s2[0], s2[1]); clip.closeSubpath()
-                p.save()
-                p.setTransform(M)
-                p.setClipPath(clip)
-                p.drawPixmap(QRectF(sx, 0, dx, H), pm, QRectF(sx, 0, dx, H))
-                p.restore()
-                # 弧面光影：靠近书脊一侧偏暗
-                shade = int(120 * (1.0 - u0) ** 1.4)
-                if shade > 0:
-                    path = QPainterPath()
-                    path.moveTo(t0[0], t0[1]); path.lineTo(t1[0], t1[1]); path.lineTo(t2[0], t2[1]); path.closeSubpath()
-                    p.setPen(Qt.PenStyle.NoPen)
-                    p.setBrush(QColor(0, 0, 0, shade))
-                    p.drawPath(path)
-        p.restore()
+        warped, bx, by = self._warp_page(pm, mirror, pivot_x, cy, fx, hs, W, H)
+        if warped is not None:
+            p.drawPixmap(QPointF(bx, by), warped)
+
+        # 弧面光影：书脊侧偏暗，整页单条平滑渐变
+        yt_spine = cy - H / 2.0
+        yb_spine = cy + H / 2.0
+        yt_free = cy - hs / 2.0
+        yb_free = cy + hs / 2.0
+        path = QPainterPath()
+        path.moveTo(pivot_x, yt_spine)
+        path.lineTo(fx, yt_free)
+        path.lineTo(fx, yb_free)
+        path.lineTo(pivot_x, yb_spine)
+        path.closeSubpath()
+        g = QLinearGradient(pivot_x, 0, fx, 0)
+        g.setColorAt(0.0, QColor(0, 0, 0, 52))
+        g.setColorAt(0.4, QColor(0, 0, 0, 16))
+        g.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(g))
+        p.drawPath(path)
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -2691,17 +2707,21 @@ class PageView(QWidget):
         if e.button() == Qt.MouseButton.LeftButton:
             self._press_pos = e.position()
             self._dragged = False
-            off = self._hit(e.position())
-            if off is not None:
-                self.sel_start = self.sel_end = off
-                self.selecting = True
-                self.update()
 
     def mouseMoveEvent(self, e):
+        moved = self._press_pos is not None and \
+                (e.position() - self._press_pos).manhattanLength() > 6
+        if not self.selecting and moved:
+            # 拖动才开始选字（避免长按/单击闪烁高亮）
+            off = self._hit(self._press_pos)
+            if off is not None:
+                self.selecting = True
+                self.sel_start = off
+                self.sel_end = off
+                self._dragged = True
         if self.selecting:
-            if self._press_pos is not None and \
-               (e.position() - self._press_pos).manhattanLength() > 6:
-                self._dragged = True          # 拖动 = 选字，不翻页
+            if moved:
+                self._dragged = True          # 拖动 = 选字
             off = self._hit(e.position())
             if off is not None:
                 self.sel_end = off
@@ -2721,6 +2741,7 @@ class PageView(QWidget):
         dragged = self._dragged
         self.selecting = False
         self._dragged = False
+        self._press_pos = None
         if dragged:
             if self.sel_start > self.sel_end:
                 self.sel_start, self.sel_end = self.sel_end, self.sel_start
