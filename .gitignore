@@ -5,6 +5,11 @@
 __pycache__/
 *.pyc
 
+# 打包产物
+build/
+dist/
+*.zip
+
 # 编辑器 / 系统杂物
 .vscode/
 .DS_Store
