@@ -77,6 +77,7 @@ class MainWindow(QMainWindow):
         self.tts_cache = {}           # seq -> mp3 字节
         self.tts_inflight = set()
         self.tts_workers = {}         # seq -> TtsWorker（防止信号前被 GC）
+        self.tts_failed_seqs = set()  # 本章内合成失败的句子（跳过，不重试）
         self.tts_buf = None
         self.bilingual_on = bool(self.cfg.get("bilingual", False))
         self.tr_cache = {}            # seq -> 译文
@@ -487,6 +488,7 @@ class MainWindow(QMainWindow):
         self.tts_sentences = sents
         self.tts_epoch += 1            # 换章：旧缓存/在途结果全部作废
         self.tts_cache.clear(); self.tts_inflight.clear(); self.tts_workers.clear()
+        self.tts_failed_seqs.clear()
         self.tr_cache.clear(); self.tr_inflight.clear(); self.tr_workers.clear()
         return bool(sents)
 
@@ -533,7 +535,7 @@ class MainWindow(QMainWindow):
                       self.cfg.get("tts_voice", TTS_DEFAULT_VOICE),
                       self.cfg.get("tts_rate", "+0%"))
         w.ready.connect(lambda s, d, ep=epoch: self._tts_on_ready(ep, s, d))
-        w.failed.connect(lambda m, ep=epoch: self._tts_failed(ep, m))
+        w.failed.connect(lambda s, m, ep=epoch: self._tts_on_failed(ep, s, m))
         self.tts_workers[(epoch, seq)] = w  # 保持引用，防止队列信号前被 GC
         threading.Thread(target=w.run, daemon=True).start()
 
@@ -563,6 +565,8 @@ class MainWindow(QMainWindow):
 
     def _tts_advance(self):
         nxt = self.tts_idx + 1
+        while nxt < len(self.tts_sentences) and nxt in self.tts_failed_seqs:
+            nxt += 1
         if nxt < len(self.tts_sentences):
             self._tts_start_sentence(nxt)
         else:
@@ -573,13 +577,17 @@ class MainWindow(QMainWindow):
             # 延迟到下一轮事件循环，避免在媒体信号回调里重入 play() 导致卡死
             QTimer.singleShot(0, self._tts_advance)
 
-    def _tts_failed(self, epoch, msg):
+    def _tts_on_failed(self, epoch, seq, msg):
+        """单句合成失败：跳过该句继续朗读，而不是中断整章。"""
         if not self.tts_on or epoch != self.tts_epoch:
             return
-        self.tts_inflight.clear(); self.tts_workers.clear()
-        self._tts_stop()
-        self.statusBar().showMessage("朗读失败：" + msg)
-        _log_tts(f"[失败] {msg}")
+        self.tts_inflight.discard(seq)
+        self.tts_workers.pop((epoch, seq), None)
+        self.tts_failed_seqs.add(seq)
+        _log_tts(f"[跳过] 第{seq + 1}句合成失败：{msg}")
+        if seq == self.tts_idx:      # 当前句失败 → 直接读下一句
+            self.statusBar().showMessage(f"跳过无法朗读的句子（{seq + 1}/{len(self.tts_sentences)}）")
+            self._tts_advance()
 
     def _tts_stop(self, finished=False):
         was_on = self.tts_on
@@ -589,6 +597,7 @@ class MainWindow(QMainWindow):
         self.tts_epoch += 1
         self.tts_sentences = []
         self.tts_cache = {}; self.tts_inflight = set(); self.tts_workers = {}
+        self.tts_failed_seqs = set()
         self.tr_cache = {}; self.tr_inflight = set(); self.tr_workers = {}
         if self.player:
             self.player.stop()

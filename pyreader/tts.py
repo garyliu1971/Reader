@@ -172,7 +172,7 @@ def _synth_once(edge_tts, text, voice, rate):
 
 class TtsWorker(QObject):
     ready = Signal(int, bytes)     # (句子序号, mp3 字节)
-    failed = Signal(str)
+    failed = Signal(int, str)      # (句子序号, 错误信息)
     def __init__(self, seq, text, voice, rate):
         super().__init__()
         self.seq, self.text, self.voice, self.rate = seq, text, voice, rate
@@ -180,7 +180,7 @@ class TtsWorker(QObject):
         try:
             self.ready.emit(self.seq, synthesize_tts(self.text, self.voice, self.rate))
         except Exception as e:
-            self.failed.emit(str(e))
+            self.failed.emit(self.seq, str(e))
 
 class TranslateWorker(QObject):
     done = Signal(int, str)        # (句子序号, 译文)

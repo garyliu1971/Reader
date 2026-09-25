@@ -267,7 +267,7 @@ class PageView(QWidget):
         fx = pivot_x + d * W * c * (D / den)         # 自由边屏幕 x
         if abs(fx - pivot_x) < 1.0:                  # 页面侧立，几乎不可见
             return
-        hs = H * D / den                             # 自由边投影高度
+        hs = H                                       # 自由边高度保持不变（避免透视把文字明显放大）
 
         warped, bx, by = self._warp_page(pm, mirror, pivot_x, cy, fx, hs, W, H)
         if warped is not None:
