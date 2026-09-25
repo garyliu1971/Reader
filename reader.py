@@ -1,12 +1,12 @@
 # reader.py —— 基于 PySide6 的文本小说阅读器（支持大文件惰性分页）
 # 双击 start.bat 或命令行:  python reader.py 小说.txt
-import sys, json, re, os, threading, bisect, urllib.request, asyncio, time, zipfile, posixpath, html, io, wave
+import sys, json, re, os, threading, bisect, urllib.request, asyncio, time, zipfile, posixpath, html, io, wave, math
 from urllib.parse import unquote, urlparse
 import xml.etree.ElementTree as ET
 from typing import List, Tuple, Optional
 
-from PySide6.QtCore import Qt, QRectF, QSizeF, QPointF, Signal, QObject, QTimer, QEvent, QBuffer, QByteArray, QIODevice
-from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QColor, QPen, QNativeGestureEvent, QBrush, QLinearGradient, QPixmap
+from PySide6.QtCore import Qt, QRectF, QSizeF, QPointF, Signal, QObject, QTimer, QEvent, QBuffer, QByteArray, QIODevice, QVariantAnimation, QEasingCurve
+from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QColor, QPen, QNativeGestureEvent, QBrush, QLinearGradient, QPixmap, QTransform, QRadialGradient, QPainterPath
 try:
     from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
     _HAS_MULTIMEDIA = True
@@ -38,6 +38,8 @@ WHEEL_THRESHOLD = 80.0  # 滚轮/滑动翻页触发阈值（角度单位）
 INDENT_SPACES = 2       # 段落首行缩进（中文字符数）
 PARA_SPACING = 0.5      # 段落间距（行高的倍数）
 CLICK_ZONE = 0.28       # 单击左右两侧翻页的触发宽度（占窗口比例）
+FLIP_MS = 380            # 3D 翻页动画时长（毫秒）
+FLIP_PERSPECTIVE = 3.2   # 翻页透视强度（相机距离 = 页宽 × 该系数，越小越夸张）
 
 # ============ 分页（只分"一章"的量，所以永远很快） ============
 class Line:
@@ -803,10 +805,11 @@ class _Chapter:
 
 class LazyPager:
     """按章节惰性分页，只缓存最近几章，其余按需计算。"""
-    def __init__(self, text: str, chapters: List[Tuple[int, str]], md: bool = False, pdf_blocks=None):
+    def __init__(self, text: str, chapters: List[Tuple[int, str]], md: bool = False, pdf_blocks=None, scan_pages=None):
         self.text = text
         self.md = md
         self.pdf_blocks = pdf_blocks
+        self.scan_pages = scan_pages
         self._params = {"font": QFont(), "page_size": QSizeF(400, 500),
                         "line_spacing": LINE_SPACING, "margin_x": MARGIN_X,
                         "margin_y": MARGIN_Y, "para_spacing": PARA_SPACING}
@@ -837,7 +840,19 @@ class LazyPager:
         if pages is None:
             c = self.chapters[ci]
             p = self._params
-            if self.pdf_blocks is not None:
+            if self.scan_pages is not None:
+                # 扫描版：一章 = 一页，直接构造含整页位图的 Page
+                spec = self.scan_pages[c.start]
+                max_w = p["page_size"].width() - 2 * p["margin_x"]
+                max_h = p["page_size"].height() - 2 * p["margin_y"]
+                iw, ih = spec["w"], spec["h"]
+                scale = min(max_w / max(1.0, iw), max_h / max(1.0, ih)) if iw and ih else 1.0
+                scale = min(scale, 1.0)   # 不放大超过原始分辨率，避免模糊
+                dw, dh = iw * scale, ih * scale
+                ln = Line("", c.start, c.end, indent=0.0, style="image",
+                          height=dh, ascent=0.0, image=(spec["img_id"], dw, dh))
+                pages = [Page(0, c.start, c.end, [ln])]
+            elif self.pdf_blocks is not None:
                 max_w = p["page_size"].width() - 2 * p["margin_x"]
                 usable_h = p["page_size"].height() - 2 * p["margin_y"]
                 line_h = QFontMetricsF(p["font"]).height() * p["line_spacing"]
@@ -1002,6 +1017,7 @@ _PDF_MONO_HINTS = ("mono", "courier", "consola", "typewriter", "menlo", "code", 
 _PDF_BULLET_RE = re.compile(r"^\s*([\u2022\u00b7\u25aa\u25e6\u25cf\u25cb\u25c6\u25a0\u25a1\u203b\u2023\u2219]|[-\u2013\u2014*])\s+")
 _PDF_NUMBER_RE = re.compile(r"^\s*(\d{1,3}|[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e]{1,3})[\.\u3001)\uff09]\s*")
 _PDF_PAGENO_RE = re.compile(r"^[\s\-\u2013\u2014\u00b7\.\u00b7|]*([ivxlcdmIVXLCDM]{1,7}|\d{1,4})[\s\-\u2013\u2014\u00b7\.\u00b7|]*$")
+_PDF_SECTION_RE = re.compile(r"^\s*[\u25a0\u25aa\u25ae\u25cf\u25c6\u25b6\u25b8\u25ba]\S")   # ■INTRODUCTION 之类节标题
 _PDF_CJK_RANGES = ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0x3000, 0x303F),
                    (0x3040, 0x30FF), (0xAC00, 0xD7AF), (0xF900, 0xFAFF), (0xFF00, 0xFFEF))
 
@@ -1066,6 +1082,128 @@ _PDF_IMG_MIN = 24         # 最小边长（点），小于视为图标/线条
 _PDF_IMG_MAX_AREA = 0.85  # 超过页面面积此比例的图（整页背景/扫描）不提取
 _PDF_IMG_ZOOM_MAX = 2.0
 _PDF_IMG_TARGET_W = 1400  # 插图渲染目标宽度（像素）
+_PDF_VEC_MIN_ITEMS = 2    # 矢量插图最少绘图元素数（过滤单条线/单个框）
+_PDF_SCAN_TARGET_W = 1400 # 扫描版整页渲染目标宽度（像素）
+_PDF_SCAN_ZOOM_MAX = 2.5
+_PDF_SCAN_JPEG_Q = 80     # 扫描版整页 JPEG 质量（灰度页，体积小）
+
+def _pdf_rects_intersect(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+def _pdf_merge_boxes(boxes, gap=6.0):
+    """把重叠/相邻的矢量绘图框聚成簇，返回 [(x0,y0,x1,y1,weight)]。"""
+    n = len(boxes)
+    if n <= 1:
+        return [(b[0], b[1], b[2], b[3], b[4]) for b in boxes]
+    parent = list(range(n))
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    for i in range(n):
+        x0, y0, x1, y1, _ = boxes[i]
+        gx0, gy0, gx1, gy1 = x0 - gap, y0 - gap, x1 + gap, y1 + gap
+        for j in range(i + 1, n):
+            jx0, jy0, jx1, jy1, _ = boxes[j]
+            if gx0 < jx1 and jx0 < gx1 and gy0 < jy1 and jy0 < gy1:
+                union(i, j)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(boxes[i])
+    out = []
+    for grp in groups.values():
+        x0 = min(b[0] for b in grp); y0 = min(b[1] for b in grp)
+        x1 = max(b[2] for b in grp); y1 = max(b[3] for b in grp)
+        wsum = sum(b[4] for b in grp)
+        out.append((x0, y0, x1, y1, wsum))
+    return out
+
+def _pdf_vector_figures(draws, pw, ph, page_area, table_rects, image_rects):
+    """从矢量绘图里挑出像“插图/示意图”的簇（过滤表格线、页眉页脚线、边框等）。
+    返回 [(x0,y0,x1,y1)...]，其中的文字随图一起渲染，正文里会跳过。"""
+    if not draws or len(draws) > 1500:
+        return []
+    boxes = []
+    for d in draws:
+        r = d.get("rect")
+        if not r:
+            continue
+        x0, y0, x1, y1 = [float(v) for v in r]
+        if x1 <= x0 and y1 <= y0:      # 只跳过“点”，保留零厚度的连接线
+            continue
+        w, h = x1 - x0, y1 - y0
+        # 高亮/下划线等“纯填充细长条”：跟随文字行，不是图
+        if d.get("type") == "f" and min(w, h) < 14.0 and max(w, h) > min(w, h) * 3.0:
+            continue
+        if any(_pdf_rects_intersect((x0, y0, x1, y1), tb) for tb in table_rects):
+            continue
+        weight = max(1, len(d.get("items", []) or []))
+        boxes.append((x0, y0, x1, y1, weight))
+    if not boxes:
+        return []
+    out = []
+    for (x0, y0, x1, y1, wsum) in _pdf_merge_boxes(boxes):
+        w, h = x1 - x0, y1 - y0
+        if w < _PDF_IMG_MIN or h < _PDF_IMG_MIN:
+            continue
+        if w * h > page_area * _PDF_IMG_MAX_AREA:
+            continue
+        if wsum < _PDF_VEC_MIN_ITEMS:      # 单条线/单个框基本不是图
+            continue
+        if min(w, h) < 6.0:                # 过扁/过窄的线状簇（分隔线、下划线）
+            continue
+        if h < 12.0 and w > pw * 0.7:      # 通栏横线
+            continue
+        if w < 12.0 and h > ph * 0.7:      # 通栏竖线
+            continue
+        if any(_pdf_rects_intersect((x0, y0, x1, y1), ir) for ir in image_rects):
+            continue                        # 已被位图插图覆盖
+        out.append((x0, y0, x1, y1))
+    return out
+
+def _pdf_in_fig(bbox, fig_rects):
+    """判断文本行是否位于矢量插图内部（其中心点落在插图框内）。"""
+    if not fig_rects:
+        return False
+    cx = (bbox[0] + bbox[2]) / 2
+    cy = (bbox[1] + bbox[3]) / 2
+    return any(fx0 <= cx <= fx2 and fy0 <= cy <= fy3 for (fx0, fy0, fx2, fy3) in fig_rects)
+
+def _pdf_page_is_grayscale(page):
+    """判断扫描页是否灰度（无 RGB/CMYK 图）。"""
+    try:
+        for info in page.get_image_info(xrefs=True):
+            if info.get("colorspace") in (3, 4):   # RGB / CMYK
+                return False
+    except Exception:
+        pass
+    return True
+
+def _pdf_render_scan_pages(path, n_pages, progress=None):
+    """扫描版（无文字层）：把每页整页渲染成 JPEG，返回 (pages_spec, images)。"""
+    import pymupdf
+    doc = pymupdf.open(path)
+    try:
+        pages, images = [], {}
+        for pno in range(n_pages):
+            if progress and (pno % 10 == 0 or pno == n_pages - 1):
+                progress(15 + int(80 * pno / max(1, n_pages)),
+                         "渲染扫描页… %d/%d 页" % (pno + 1, n_pages))
+            page = doc[pno]
+            pw = max(1.0, float(page.rect.width))
+            zoom = max(1.0, min(_PDF_SCAN_ZOOM_MAX, _PDF_SCAN_TARGET_W / pw))
+            cs = pymupdf.csGRAY if _pdf_page_is_grayscale(page) else pymupdf.csRGB
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=cs, alpha=False)
+            images[pno] = pix.tobytes("jpeg", jpg_quality=_PDF_SCAN_JPEG_Q)
+            pages.append({"img_id": pno, "w": pix.width, "h": pix.height})
+        return pages, images
+    finally:
+        doc.close()
 
 def _pdf_extract(path, progress=None):
     import warnings
@@ -1109,9 +1247,13 @@ def _pdf_extract(path, progress=None):
                                       tuple(s.get("bbox", (0, 0, 0, 0)))))
                     if spans and any(t.strip() for (t, *_r) in spans):
                         lines.append({"bbox": tuple(ln.get("bbox", (0, 0, 0, 0))), "spans": spans})
+            try:
+                draws = page.get_drawings()
+            except Exception:
+                draws = []
             tables = []
             # 表格识别很贵：仅当页面有较多线条、且在时间预算内才做
-            if time.time() < tbl_deadline and len(page.get_drawings()) >= 12:
+            if time.time() < tbl_deadline and len(draws) >= 12:
                 try:
                     for t in page.find_tables().tables:
                         data = t.extract()
@@ -1119,8 +1261,10 @@ def _pdf_extract(path, progress=None):
                             tables.append((tuple(t.bbox), [[(c or "").strip() for c in row] for row in data]))
                 except Exception:
                     pass
-            # 插图：按位置框渲染成 PNG（保留原分辨率，最高 2x）
+            table_rects = [bb for bb, _rows in tables]
+            # 插图：先位图、再矢量图（按位置框渲染成 PNG）
             page_imgs = []
+            image_rects = []
             if time.time() < img_deadline and img_seq < _PDF_IMG_MAX:
                 try:
                     pw, ph = float(page.rect.width), float(page.rect.height)
@@ -1140,18 +1284,40 @@ def _pdf_extract(path, progress=None):
                                               matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
                         if pix.width < 8 or pix.height < 8:
                             continue
-                        images[img_seq] = (pix.tobytes("png"), pix.width, pix.height)
+                        images[img_seq] = pix.tobytes("png")
                         page_imgs.append((y0, img_seq, pix.width, pix.height))
+                        image_rects.append((x0, y0, x1, y1))
+                        img_seq += 1
+                        if img_seq >= _PDF_IMG_MAX or time.time() >= img_deadline:
+                            break
+                except Exception:
+                    pass
+            fig_rects = []
+            if time.time() < img_deadline and img_seq < _PDF_IMG_MAX:
+                try:
+                    pw, ph = float(page.rect.width), float(page.rect.height)
+                    page_area = max(1.0, pw * ph)
+                    for (x0, y0, x1, y1) in _pdf_vector_figures(draws, pw, ph, page_area,
+                                                                 table_rects, image_rects):
+                        w, h = x1 - x0, y1 - y0
+                        zoom = max(1.0, min(_PDF_IMG_ZOOM_MAX, _PDF_IMG_TARGET_W / max(1.0, w)))
+                        pix = page.get_pixmap(clip=pymupdf.Rect(x0, y0, x1, y1),
+                                              matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+                        if pix.width < 8 or pix.height < 8:
+                            continue
+                        images[img_seq] = pix.tobytes("png")
+                        page_imgs.append((y0, img_seq, pix.width, pix.height))
+                        fig_rects.append((x0, y0, x1, y1))
                         img_seq += 1
                         if img_seq >= _PDF_IMG_MAX or time.time() >= img_deadline:
                             break
                 except Exception:
                     pass
             pages.append({"lines": lines, "tables": tables, "images": page_imgs,
-                          "height": float(page.rect.height)})
+                          "fig_rects": fig_rects, "height": float(page.rect.height)})
     finally:
         doc.close()
-    return title, toc, pages, images
+    return title, toc, pages, images, any(pg["lines"] for pg in pages)
 
 def _pdf_body_size(pages):
     hist = {}
@@ -1210,6 +1376,8 @@ def _pdf_build(pages, body, running):
             if _PDF_PAGENO_RE.match(txt) and ph and (y0 < ph * 0.08 or y0 > ph * 0.9):
                 continue
             x0, y0, x1, y1 = ln["bbox"]
+            if _pdf_in_fig((x0, y0, x1, y1), pg.get("fig_rects", [])):
+                continue   # 矢量插图内部的文字，随图一起渲染，避免重复
             table = next((item for item in tables
                           if x1 > item["bbox"][0] and x0 < item["bbox"][2]
                           and item["bbox"][1] <= (y0 + y1) / 2 <= item["bbox"][3]), None)
@@ -1281,12 +1449,15 @@ def _pdf_build(pages, body, running):
             if not lev and (bits_line & MD_BOLD) and len(stripped) <= 64 \
                and gap is not None and gap > body * 0.8:
                 lev = 3
+            sect = bool(_PDF_SECTION_RE.match(ltxt) and len(stripped) <= 80)
+            if sect and not lev:
+                lev = 3   # ■INTRODUCTION / ■CONCLUSION 之类节标题（标记直接黏在文字上）
             m_bullet = _PDF_BULLET_RE.match(ltxt)
             m_num = None if m_bullet else _PDF_NUMBER_RE.match(ltxt)
             if lev:
                 if para is not None and para["spans"]:
                     blocks.append(para)
-                blocks.append({"type": "heading", "level": lev, "spans": spans, "page": pi})
+                blocks.append({"type": "heading", "level": lev, "spans": spans, "page": pi, "sect": sect})
                 para, prev = None, {"text": stripped, "bottom": ln["bbox"][3], "page": pi, "full": full}
                 continue
             if m_bullet or m_num:
@@ -1426,10 +1597,27 @@ def _pdf_chapters(blocks, toc, text, page_offsets):
             ded.insert(0, (0, "开篇"))
         if ded:
             return ded
-    hs = [b for b in blocks if b["type"] == "heading" and b.get("level", 9) <= 2]
-    if hs:
-        ch = [(b["start"], _block_text(b).strip()[:60] or "—") for b in hs]
-        if ch and ch[0][0] != 0:
+    def _is_ch(b):
+        return b["type"] == "heading" and (b.get("level", 9) <= 2 or b.get("sect"))
+    # 合并“相邻且同级”的标题块（论文标题常折行成多行，避免拆成多个伪章节）
+    ch, cur = [], None
+    for b in blocks:
+        if _is_ch(b):
+            bt = re.sub(r"^[\u25a0\u25aa\u25ae\u25cf\u25c6\u25b6\u25b8\u25ba]+", "", _block_text(b).strip())
+            bt = bt.strip()[:60]
+            if cur is not None and cur["page"] == b.get("page") and cur["level"] == b.get("level"):
+                cur["title"] = (cur["title"] + " " + bt).strip()[:60]
+            else:
+                if cur is not None:
+                    ch.append((cur["start"], cur["title"]))
+                cur = {"start": b["start"], "title": bt or "—", "page": b.get("page"), "level": b.get("level")}
+        elif cur is not None:
+            ch.append((cur["start"], cur["title"]))
+            cur = None
+    if cur is not None:
+        ch.append((cur["start"], cur["title"]))
+    if ch:
+        if ch[0][0] != 0:
             ch.insert(0, (0, "开篇"))
         return ch
     return scan_chapters(text)
@@ -1562,15 +1750,23 @@ def render_pdf_lines(blocks, font, max_w, line_spacing, para_spacing, line_h, ma
     return out
 
 def load_pdf(path, progress=None):
-    """解析 PDF（仅限有文字层的，不支持扫描版）→ (全文, 章节, 书名, 版式块)。
-    保留标题层级 / 粗体斜体 / 段落 / 列表 / 代码 / 表格，交给 LazyPager 富文本渲染。"""
+    """解析 PDF → (全文, 章节, 书名, 版式块)。
+    有文字层：还原标题层级 / 粗体斜体 / 段落 / 列表 / 代码 / 表格，交给 LazyPager 富文本渲染。
+    无文字层（扫描版/图片 PDF）：整页渲染成图，以“每页一章”的图片模式显示。"""
     try:
         import pymupdf  # noqa: F401
     except Exception as e:
         raise RuntimeError("未安装 PyMuPDF，请执行：pip install pymupdf") from e
-    title, toc, pages, images = _pdf_extract(path, progress)
-    if not any(pg["lines"] for pg in pages):
-        raise RuntimeError("此 PDF 没有可提取的文字层（可能是扫描版/图片 PDF，暂不支持，需要 OCR）")
+    title, toc, pages, images, has_text = _pdf_extract(path, progress)
+    if not has_text:
+        # 扫描版 / 图片 PDF：无文字层，整页渲染成图（每页一章）
+        spec, images = _pdf_render_scan_pages(path, len(pages), progress)
+        n = len(spec)
+        text = "\u3000" * n
+        chapters = [(i, f"第 {i + 1} 页") for i in range(n)]
+        if progress:
+            progress(98, "完成")
+        return text, chapters, title, {"mode": "scan", "pages": spec, "images": images}
     body = _pdf_body_size(pages)
     running = _pdf_running_keys(pages)
     blocks = _pdf_build(pages, body, running)
@@ -1931,8 +2127,10 @@ class PageView(QWidget):
     def __init__(self):
         super().__init__()
         self.pages: List[Page] = []
-        self.pdf_images = {}      # img_id -> PNG 字节（PDF 插图）
+        self.pdf_images = {}      # img_id -> PNG/JPEG 字节（PDF 插图/扫描页）
         self._img_cache = {}      # img_id -> QPixmap（懒解码 + LRU）
+        self.scan_mode = False
+        self.scan_pages = []      # 扫描版：每页一张整页位图 [{img_id, w, h}]
         self.full_text = ""
         self.font = QFont(); self.font.setPointSize(16)
         self.line_spacing = LINE_SPACING
@@ -1941,6 +2139,13 @@ class PageView(QWidget):
         self.para_spacing = PARA_SPACING
         self.line_h = QFontMetricsF(self.font).height() * self.line_spacing
         self.spread = 0
+        # 3D 翻页动画状态
+        self._flip_anim = None          # QVariantAnimation（进行中）
+        self._flip_dir = 0              # +1 向前 / -1 向后
+        self._flip_t = 0.0              # 动画进度 0~1
+        self._flip_from = 0             # 动画起始 spread
+        self._flip_rect = None          # 翻动页的起始矩形
+        self._flip_snaps = {}           # {'front': QPixmap, 'back': QPixmap}
         self.sel_start = self.sel_end = -1
         self.read_start = self.read_end = -1   # 朗读高亮范围
         self.search_starts = []                # 搜索匹配起始偏移列表
@@ -2009,6 +2214,8 @@ class PageView(QWidget):
     def flip(self, delta: int):
         if not self.pages:
             return
+        if self._flip_anim is not None:          # 动画进行中，忽略重复触发
+            return
         total = (len(self.pages) + 1) // 2
         ns = self.spread + delta
         if ns < 0:
@@ -2016,33 +2223,242 @@ class PageView(QWidget):
         elif ns >= total:
             self.needChapter.emit(1, False)       # 去下一章首页
         else:
-            self.spread = ns
-            self.pageChanged.emit(self.left_page_offset())
-            self.update()
+            self._start_flip(ns, delta)
+
+    # ---- 3D 翻页动画（Book Bazaar / Apple Books 式单页翻转） ----
+    def cancel_flip(self):
+        """停止并清理进行中的翻页动画（章节跳转 / 重排时调用）。"""
+        if self._flip_anim is not None:
+            self._flip_anim.stop()
+            self._flip_anim.deleteLater()
+            self._flip_anim = None
+        self._flip_dir = 0
+        self._flip_snaps = {}
+
+    def _header_for(self, idx):
+        """按页在书中的位置（奇偶）返回页眉：左页=书名，右页=章节。"""
+        return self.book_title if idx % 2 == 0 else self.chapter_title
+
+    def _spine_side(self, idx):
+        """按页在书中的位置返回装订侧：左页书脊在右，右页书脊在左。"""
+        return 'right' if idx % 2 == 0 else 'left'
+
+    def _flip_snapshot(self, rect, page, header, spine_side):
+        """把一页渲染成位图（翻页动画用，不含外部投影）。"""
+        size = rect.size().toSize()
+        if page is None or size.width() < 2 or size.height() < 2:
+            return None
+        pm = QPixmap(size)
+        pm.fill(Qt.GlobalColor.transparent)
+        q = QPainter(pm)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
+        q.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        q.translate(-rect.left(), -rect.top())
+        self._draw_page(q, rect, page, header, shadow=False, spine_side=spine_side)
+        q.end()
+        return pm
+
+    def _start_flip(self, target, direction):
+        self._flip_from = self.spread
+        self._flip_dir = 1 if direction > 0 else -1
+        left, right = self.page_rects()
+        f = self._flip_from
+        if self._flip_dir > 0:
+            # 向前翻：右页(2f+1) 绕书脊翻到左，翻过去后露出背面(2f+2)
+            self._flip_rect = right
+            front = self.pages[2 * f + 1] if 2 * f + 1 < len(self.pages) else None
+            back = self.pages[2 * f + 2] if 2 * f + 2 < len(self.pages) else None
+            self._flip_snaps['front'] = self._flip_snapshot(right, front, self._header_for(2 * f + 1), self._spine_side(2 * f + 1))
+            self._flip_snaps['back'] = self._flip_snapshot(right, back, self._header_for(2 * f + 2), self._spine_side(2 * f + 2))
+        else:
+            # 向后翻：左页(2f) 绕书脊翻到右，翻过去后露出背面(2f-1)
+            self._flip_rect = left
+            front = self.pages[2 * f] if 2 * f < len(self.pages) else None
+            back = self.pages[2 * f - 1] if 2 * f - 1 >= 0 else None
+            self._flip_snaps['front'] = self._flip_snapshot(left, front, self._header_for(2 * f), self._spine_side(2 * f))
+            self._flip_snaps['back'] = self._flip_snapshot(left, back, self._header_for(2 * f - 1), self._spine_side(2 * f - 1))
+        self._flip_t = 0.0
+        self._flip_anim = QVariantAnimation(self)
+        self._flip_anim.setStartValue(0.0)
+        self._flip_anim.setEndValue(1.0)
+        self._flip_anim.setDuration(FLIP_MS)
+        self._flip_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._flip_anim.valueChanged.connect(self._on_flip_tick)
+        self._flip_anim.finished.connect(lambda: self._finish_flip(target))
+        self._flip_anim.start()
+        self.update()
+
+    def _on_flip_tick(self, v):
+        self._flip_t = float(v)
+        self.update()
+
+    def _finish_flip(self, target):
+        if self._flip_anim is not None:
+            self._flip_anim.deleteLater()
+            self._flip_anim = None
+        self._flip_dir = 0
+        self._flip_snaps = {}
+        self.spread = target
+        self.pageChanged.emit(self.left_page_offset())
+        self.update()
+
+    def _draw_turning_page(self, p):
+        """逐条带 + 双三角形仿射，绘制带透视的翻动页。
+        Qt 光栅引擎不原生支持图像的透视映射，需分三角形逼近（关闭抗锯齿消除接缝）。"""
+        t = self._flip_t
+        front = t < 0.5
+        pm = self._flip_snaps.get('front' if front else 'back')
+        if pm is None or pm.isNull():
+            return
+        if (front and self._flip_dir < 0) or (not front and self._flip_dir > 0):
+            pm = QPixmap.fromImage(pm.toImage().mirrored(True, False))
+
+        rect = self._flip_rect
+        W = rect.width(); H = rect.height()
+        if W < 2 or H < 2:
+            return
+        gutter = self.gutter
+        if self._flip_dir > 0:        # 右页 → 左页
+            pivot0 = rect.left(); pivot1 = rect.left() - gutter; d = 1.0
+        else:                         # 左页 → 右页
+            pivot0 = rect.right(); pivot1 = rect.right() + gutter; d = -1.0
+        theta = t * math.pi
+        pivot_x = pivot0 + (pivot1 - pivot0) * t     # 书脊随翻页滑过书缝
+        cy = rect.top() + H / 2.0
+        c = math.cos(theta); s = math.sin(theta)
+        D = max(1.0, FLIP_PERSPECTIVE * W)
+        den = D - W * s
+        if den <= 0.0:
+            den = 0.001
+        fx = pivot_x + d * W * c * (D / den)         # 自由边屏幕 x
+        if abs(fx - pivot_x) < 1.0:                  # 页面侧立，几乎不可见
+            return
+
+        N = max(24, min(72, int(W // 7)))
+        dx = W / N
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)   # 关键：避免条带接缝
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        for i in range(N):
+            u0 = i / N; u1 = (i + 1) / N
+            d0 = D - W * u0 * s; d1 = D - W * u1 * s
+            if d0 <= 0.0: d0 = 0.001
+            if d1 <= 0.0: d1 = 0.001
+            x0 = pivot_x + d * W * u0 * c * (D / d0)
+            x1 = pivot_x + d * W * u1 * c * (D / d1)
+            h0 = H * D / d0; h1 = H * D / d1
+            yt0 = cy - h0 / 2.0; yt1 = cy - h1 / 2.0
+            yb0 = cy + h0 / 2.0; yb1 = cy + h1 / 2.0
+            sx = i * dx
+            # 双三角形：A=(p0,p1,p2)，B=(p1,p3,p2)
+            for (t0, t1, t2, s0, s1, s2) in (
+                ((x0, yt0), (x1, yt1), (x0, yb0), (sx, 0), (sx + dx, 0), (sx, H)),
+                ((x1, yt1), (x1, yb1), (x0, yb0), (sx + dx, 0), (sx + dx, H), (sx, H)),
+            ):
+                exx = s1[0] - s0[0]; exy = s1[1] - s0[1]
+                eyx = s2[0] - s0[0]; eyy = s2[1] - s0[1]
+                det = exx * eyy - exy * eyx
+                if abs(det) < 1e-9:
+                    continue
+                a11 = ((t1[0] - t0[0]) * eyy - (t2[0] - t0[0]) * eyx) / det
+                a21 = (-(t1[0] - t0[0]) * exy + (t2[0] - t0[0]) * exx) / det
+                a12 = ((t1[1] - t0[1]) * eyy - (t2[1] - t0[1]) * eyx) / det
+                a22 = (-(t1[1] - t0[1]) * exy + (t2[1] - t0[1]) * exx) / det
+                tx = t0[0] - a11 * s0[0] - a21 * s0[1]
+                ty = t0[1] - a12 * s0[0] - a22 * s0[1]
+                M = QTransform(a11, a12, a21, a22, tx, ty)
+                clip = QPainterPath()
+                clip.moveTo(s0[0], s0[1]); clip.lineTo(s1[0], s1[1]); clip.lineTo(s2[0], s2[1]); clip.closeSubpath()
+                p.save()
+                p.setTransform(M)
+                p.setClipPath(clip)
+                p.drawPixmap(QRectF(sx, 0, dx, H), pm, QRectF(sx, 0, dx, H))
+                p.restore()
+                # 弧面光影：靠近书脊一侧偏暗
+                shade = int(120 * (1.0 - u0) ** 1.4)
+                if shade > 0:
+                    path = QPainterPath()
+                    path.moveTo(t0[0], t0[1]); path.lineTo(t1[0], t1[1]); path.lineTo(t2[0], t2[1]); path.closeSubpath()
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(QColor(0, 0, 0, shade))
+                    p.drawPath(path)
+        p.restore()
 
     def paintEvent(self, e):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(self.bg))              # 桌面背景（随主题）
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        self._draw_background(p)
         left, right = self.page_rects()
-        li, ri = self.spread * 2, self.spread * 2 + 1
-        self._draw_gutter_shadow(p, left, right)               # 书脊阴影
-        if li < len(self.pages):
-            self._draw_page(p, left, self.pages[li], self.book_title)
-        if ri < len(self.pages):
-            self._draw_page(p, right, self.pages[ri], self.chapter_title)
+        if self._flip_anim is not None:
+            self._draw_flip(p, left, right)
+        else:
+            self._draw_book_stack(p, left, right)
+            self._draw_gutter_shadow(p, left, right)
+            li, ri = self.spread * 2, self.spread * 2 + 1
+            if li < len(self.pages):
+                self._draw_page(p, left, self.pages[li], self.book_title, spine_side=self._spine_side(li))
+            if ri < len(self.pages):
+                self._draw_page(p, right, self.pages[ri], self.chapter_title, spine_side=self._spine_side(ri))
         p.end()
 
-    def _draw_gutter_shadow(self, p, left, right):
-        """书脊处一道柔和的竖向阴影，模拟装订。"""
-        x0 = left.right() - 10
-        x1 = right.left() + 10
-        g = QLinearGradient(x0, 0, x1, 0)
+    def _draw_background(self, p):
+        """桌面背景 + 中心向四周的柔光渐暗，增强立体景深。"""
+        p.fillRect(self.rect(), QColor(self.bg))
+        g = QRadialGradient(self.width() / 2.0, self.height() / 2.0,
+                            max(self.width(), self.height()) * 0.8)
         g.setColorAt(0.0, QColor(0, 0, 0, 0))
-        g.setColorAt(0.5, QColor(0, 0, 0, 80))
-        g.setColorAt(1.0, QColor(0, 0, 0, 0))
+        g.setColorAt(1.0, QColor(0, 0, 0, 78))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(g))
-        p.drawRect(QRectF(x0, left.top(), x1 - x0, left.height()))
+        p.drawRect(self.rect())
+
+    def _draw_book_stack(self, p, left, right):
+        """开卷书页下方的层叠纸边（纸厚 + 前切口），营造真实书的厚度。"""
+        base = QColor(self.page_color)
+        for k in range(6, 0, -1):        # 从外到内，最内层最后画（贴近书页）
+            off = k * 1.4
+            col = base.darker(105 + k * 7)     # 越靠外越暗
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(col)
+            # 左页：纸边向左、向下外扩（书脊侧不扩）
+            p.drawRect(QRectF(left.left() - off, left.top(), left.width() + off, left.height() + off * 0.6))
+            # 右页：纸边向右、向下外扩
+            p.drawRect(QRectF(right.left(), right.top(), right.width() + off, right.height() + off * 0.6))
+
+    def _draw_flip(self, p, left, right):
+        f = self._flip_from
+        self._draw_book_stack(p, left, right)
+        # 书脊阴影随翻页增强（页面侧立时最强）
+        self._draw_gutter_shadow(p, left, right, boost=math.sin(self._flip_t * math.pi))
+        if self._flip_dir > 0:
+            # 向前：左页静止，右侧露出新页(2f+3)，翻动页绕书脊翻到左
+            if 2 * f < len(self.pages):
+                self._draw_page(p, left, self.pages[2 * f], self.book_title, spine_side=self._spine_side(2 * f))
+            if 2 * f + 3 < len(self.pages):
+                self._draw_page(p, right, self.pages[2 * f + 3], self.chapter_title, spine_side=self._spine_side(2 * f + 3))
+        else:
+            # 向后：右页静止，左侧露出新页(2f-2)，翻动页绕书脊翻到右
+            if 2 * f + 1 < len(self.pages):
+                self._draw_page(p, right, self.pages[2 * f + 1], self.chapter_title, spine_side=self._spine_side(2 * f + 1))
+            if 2 * f - 2 >= 0:
+                self._draw_page(p, left, self.pages[2 * f - 2], self.book_title, spine_side=self._spine_side(2 * f - 2))
+        self._draw_turning_page(p)
+
+    def _draw_gutter_shadow(self, p, left, right, boost=0.0):
+        """书脊折页谷：中缝填充纸张渐暗的渐变，衔接两侧页面的折痕。
+        之前中缝露出深色背景，形成一道“黑缝”断开折页；改成纸色压暗后更连续。
+        boost 翻页时增强（页面侧立、折痕更深）。"""
+        base = QColor(self.page_color)
+        d0 = 128 + int(16 * boost)      # 中缝两缘：与页面折痕衔接的轻度压暗
+        d1 = 150 + int(30 * boost)      # 谷底更深
+        g = QLinearGradient(left.right(), 0, right.left(), 0)
+        g.setColorAt(0.0, base.darker(d0))
+        g.setColorAt(0.5, base.darker(d1))
+        g.setColorAt(1.0, base.darker(d0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(g))
+        p.drawRect(QRectF(left.right(), left.top(), right.left() - left.right(), left.height()))
 
     def _line_font(self, ln):
         if ln.style:
@@ -2127,16 +2543,63 @@ class PageView(QWidget):
         ix = tx + max(0.0, (max_w - dw) / 2.0)      # 居中
         p.drawPixmap(QRectF(ix, y, dw, dh), pm, QRectF(pm.rect()))
 
-    def _draw_page(self, p, rect, page, header_text):
+    def _draw_scan_content(self, p, rect, page):
+        """扫描版：书页上居中画整页位图，底部显示页码。"""
+        ln = page.lines[0] if page.lines else None
+        if ln and ln.image:
+            iid, dw, dh = ln.image
+            pm = self._pixmap_for(iid)
+            if pm and not pm.isNull():
+                ix = rect.left() + (rect.width() - dw) / 2.0
+                iy = rect.top() + (rect.height() - dh) / 2.0
+                p.drawPixmap(QRectF(ix, iy, dw, dh), pm, QRectF(pm.rect()))
+        total = len(self.scan_pages)
+        pf = QFont(self.font); pf.setPointSize(max(9, self.font.pointSize() - 4))
+        p.setFont(pf); p.setPen(QColor(self.pageno_color))
+        p.drawText(QRectF(rect.left(), rect.bottom() - 24, rect.width(), 18),
+                   int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+                   f"{page.start + 1} / {total}")
+        p.setFont(self.font)
+
+    def _draw_page(self, p, rect, page, header_text, shadow=True, spine_side=None):
         # 四周轻微投影，模拟书页浮在深色桌面上
-        for i in (6, 4, 2):
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(0, 0, 0, int(22 / i)))
-            p.drawRect(rect.adjusted(-i, -i, i, i))
+        if shadow:
+            for i in (6, 4, 2):
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(0, 0, 0, int(22 / i)))
+                p.drawRect(rect.adjusted(-i, -i, i, i))
         # 书页
         p.setPen(QPen(QColor(self.page_border), 1))
         p.setBrush(QColor(self.page_color))
         p.drawRect(rect)
+        # 页面光照：中心亮、四周微暗，去除“纯白平片”感
+        rad = QRadialGradient(rect.center().x(), rect.center().y() - rect.height() * 0.08,
+                              rect.width() * 0.85)
+        rad.setColorAt(0.0, QColor(0, 0, 0, 0))
+        rad.setColorAt(0.72, QColor(0, 0, 0, 0))
+        rad.setColorAt(1.0, QColor(0, 0, 0, 20))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(rad))
+        p.drawRect(rect)
+        # 书脊折痕：靠近装订一侧纸张弯曲的柔和阴影
+        if spine_side:
+            cw = rect.width() * 0.18
+            if spine_side == 'right':
+                g = QLinearGradient(rect.right(), 0, rect.right() - cw, 0)
+                band = QRectF(rect.right() - cw, rect.top(), cw, rect.height())
+            else:
+                g = QLinearGradient(rect.left(), 0, rect.left() + cw, 0)
+                band = QRectF(rect.left(), rect.top(), cw, rect.height())
+            g.setColorAt(0.0, QColor(0, 0, 0, 58))
+            g.setColorAt(0.3, QColor(0, 0, 0, 16))
+            g.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(g))
+            p.drawRect(band)
+
+        if self.scan_mode:
+            self._draw_scan_content(p, rect, page)
+            return
 
         fm = QFontMetricsF(self.font)
         base_asc = fm.ascent()
@@ -2647,13 +3110,24 @@ class MainWindow(QMainWindow):
         self.load_bar.hide()
         self.full_text = text
         self.view.set_layout(self._make_layout())
-        is_md = os.path.splitext(self.book_path)[1].lower() in MD_EXTS
-        if is_md:
-            chapters = md_chapters(text)
-        pdf_blocks = extra.get("blocks") if isinstance(extra, dict) else None
-        self.view.pdf_images = (extra.get("images") if isinstance(extra, dict) else None) or {}
-        self.view._img_cache.clear()
-        self.pager = LazyPager(text, chapters, md=is_md, pdf_blocks=pdf_blocks)
+        extra = extra if isinstance(extra, dict) else {}
+        if extra.get("mode") == "scan":
+            self.view.scan_mode = True
+            self.view.scan_pages = extra.get("pages") or []
+            self.view.pdf_images = extra.get("images") or {}
+            self.view._img_cache.clear()
+            self.pager = LazyPager(text, chapters, md=False, pdf_blocks=None,
+                                   scan_pages=self.view.scan_pages)
+        else:
+            self.view.scan_mode = False
+            self.view.scan_pages = []
+            is_md = os.path.splitext(self.book_path)[1].lower() in MD_EXTS
+            if is_md:
+                chapters = md_chapters(text)
+            pdf_blocks = extra.get("blocks")
+            self.view.pdf_images = extra.get("images") or {}
+            self.view._img_cache.clear()
+            self.pager = LazyPager(text, chapters, md=is_md, pdf_blocks=pdf_blocks)
         self.pager.set_params(self.view.pagination_params())
         self.view.full_text = text
         self.view.book_title = title or os.path.splitext(os.path.basename(self.book_path))[0]
@@ -2671,6 +3145,7 @@ class MainWindow(QMainWindow):
             return
         ci = max(0, min(len(self.pager.chapters) - 1, ci))
         self.cur_chapter = ci
+        self.view.cancel_flip()
         self.view.pages = self.pager.pages_of(ci)      # 只分这一章，毫秒级
         self.view.chapter_title = self.pager.chapters[ci].title
         pages = self.pager.pages_of(ci)
@@ -2870,6 +3345,9 @@ class MainWindow(QMainWindow):
         if not _HAS_MULTIMEDIA:
             self.statusBar().showMessage("未安装 QtMultimedia，无法朗读")
             return
+        if self.view.scan_mode:
+            self.statusBar().showMessage("扫描版 PDF 无文字层，暂不支持朗读")
+            return
         if self.tts_on and not self.tts_paused:
             self.player.pause(); self.tts_paused = True
             self._update_tts_actions(); return
@@ -3049,8 +3527,9 @@ class MainWindow(QMainWindow):
         if self.pager and self.full_text:
             off = self.view.left_page_offset()
             pct = off / max(1, len(self.full_text)) * 100
+            unit = "页" if self.view.scan_mode else "章"
             self.statusBar().showMessage(
-                f"第 {self.cur_chapter + 1}/{len(self.pager.chapters)} 章 · {pct:.1f}%")
+                f"第 {self.cur_chapter + 1}/{len(self.pager.chapters)} {unit} · {pct:.1f}%")
             self.read_slider.blockSignals(True)
             self.read_slider.setValue(int(pct * 10))
             self.read_slider.blockSignals(False)
