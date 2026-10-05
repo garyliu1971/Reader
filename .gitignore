@@ -1,6 +1,9 @@
 # 本地生成的大文件测试数据（约 28MB）
 大文件测试.txt
 
+# AI 密钥（不提交真实密钥，只提交 .env.example）
+.env
+
 # Python 缓存
 __pycache__/
 *.pyc

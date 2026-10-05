@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QDialog, QComboBox, QLineEdit, QCheckBox, QDoubleSpinBox,
                                QSpinBox, QFormLayout, QDialogButtonBox, QLabel)
-from .config import AI_PRESETS, THEMES, DEFAULT_THEME
+from .config import AI_PRESETS, THEMES, DEFAULT_THEME, FLIP_EFFECTS, DEFAULT_FLIP_EFFECT
 from .tts import TTS_VOICES, TTS_DEFAULT_VOICE, TTS_RATES
 
 # ============ 设置对话框 ============
@@ -13,6 +13,8 @@ class SettingsDialog(QDialog):
         self.key = QLineEdit(cfg.get("api_key", "")); self.key.setEchoMode(QLineEdit.Password)
         self.base = QLineEdit(cfg.get("api_base", ""))
         self.model = QLineEdit(cfg.get("model", ""))
+        self.api_version = QLineEdit(cfg.get("api_version", ""))
+        self.api_version.setPlaceholderText("仅旧式 Azure 部署路径需要，如 2024-10-21")
         # 排版参数
         self.font_family = QComboBox()
         self.font_family.addItem("系统默认", "")
@@ -33,6 +35,10 @@ class SettingsDialog(QDialog):
         self.theme.addItems(list(THEMES.keys()))
         ti = self.theme.findText(cfg.get("theme", DEFAULT_THEME))
         self.theme.setCurrentIndex(ti if ti >= 0 else 0)
+        self.flip_effect = QComboBox()
+        self.flip_effect.addItems(FLIP_EFFECTS)
+        fi = self.flip_effect.findText(cfg.get("flip_effect", DEFAULT_FLIP_EFFECT))
+        self.flip_effect.setCurrentIndex(fi if fi >= 0 else 0)
         self.font_size = QSpinBox(); self.font_size.setRange(10, 48)
         self.font_size.setValue(cfg.get("font_size", 16))
         self.line_spacing = QDoubleSpinBox(); self.line_spacing.setRange(0.8, 3.0)
@@ -77,10 +83,12 @@ class SettingsDialog(QDialog):
         form.addRow("服务商预设", self.preset)
         form.addRow("API Key", self.key)
         form.addRow("API Base", self.base)
-        form.addRow("模型", self.model)
+        form.addRow("模型 / 部署名", self.model)
+        form.addRow("API Version", self.api_version)
         form.addRow("排版", QLabel("（调整后立即生效）"))
         form.addRow("字体", self.font_family)
         form.addRow("主题", self.theme)
+        form.addRow("翻页方式", self.flip_effect)
         form.addRow("字号", self.font_size)
         form.addRow("行距", self.line_spacing)
         form.addRow("段落间距", self.para_spacing)

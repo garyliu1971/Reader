@@ -3,27 +3,40 @@ import re
 import threading
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer, QBuffer, QByteArray, QIODevice
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon
 from PySide6.QtWidgets import (QMainWindow, QWidget, QListWidget, QListWidgetItem,
                                QToolBar, QMenu, QFontDialog, QTextEdit, QVBoxLayout, QLabel,
-                               QFileDialog, QMessageBox, QProgressBar, QSlider, QDockWidget, QLineEdit)
+                               QFileDialog, QMessageBox, QProgressBar, QSlider, QDockWidget,
+                               QLineEdit, QToolButton, QWidgetAction, QHBoxLayout, QFrame,
+                               QTabWidget, QPushButton, QSizePolicy, QSplitter)
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtCore import QUrl
 from .config import (CONFIG_PATH, BOOKMARKS_PATH, OUTER, MARGIN_X, MARGIN_Y, GUTTER,
+                     load_env_defaults,
                      LINE_SPACING, PARA_SPACING, _HAS_MULTIMEDIA, QMediaPlayer, QAudioOutput,
-                     load_json, save_json, default_cjk_font, THEMES, DEFAULT_THEME, DEFAULT_CONFIG)
+                     load_json, save_json, default_cjk_font, THEMES, DEFAULT_THEME, DEFAULT_CONFIG,
+                     FLIP_EFFECTS, DEFAULT_FLIP_EFFECT)
 from .markdown import md_chapters, MD_HEAD_RE
 from .textio import MD_EXTS
 from .pager import LazyPager
 from .loader import BookLoader
 from .view import PageView
 from .settings import SettingsDialog
-from .ai import translate, lookup, AiWorker
+from .ai import (translate, lookup, AiWorker,
+                  summarize_chapter, extract_mindmap, ai_qa,
+                  continue_story, analyze_sentiment, explain_background,
+                  extract_knowledge_graph)
+from .graph import build_graph_html
 from .tts import TtsWorker, TranslateWorker, split_sentences, TTS_DEFAULT_VOICE, _log_tts
 
 # ============ 主窗口 ============
 class MainWindow(QMainWindow):
     def __init__(self, book_path=None):
         super().__init__()
-        self.cfg = {**DEFAULT_CONFIG, **load_json(CONFIG_PATH, {})}
+        # 优先级：DEFAULT_CONFIG < coding-agent/.env < 用户已保存的 config.json
+        _saved = load_json(CONFIG_PATH, {})
+        _env   = load_env_defaults() if not _saved.get("api_key") else {}
+        self.cfg = {**DEFAULT_CONFIG, **_env, **_saved}
         self.bookmarks = load_json(BOOKMARKS_PATH, {})
         self.book_path = book_path
         self.full_text = ""
@@ -42,8 +55,47 @@ class MainWindow(QMainWindow):
         left = QWidget(); lv = QVBoxLayout(left)
         lv.addWidget(QLabel("目录")); lv.addWidget(self.toc)
         lv.addWidget(QLabel("书签")); lv.addWidget(self.bm_list)
-        right = QWidget(); rv = QVBoxLayout(right)
-        rv.addWidget(self.ai_out)
+
+        # ── AI 面板（Tab 式）──────────────────────────────────────
+        self._qa_history = []          # [(role, content), ...]  多轮对话记录
+        self._qa_context_title = ""    # 当前对话绑定的章节标题
+        self._qa_context_text  = ""    # 当前对话绑定的章节全文
+
+        # Tab 1：文字输出（摘要 / 大纲 / 问答 / 续写 / 情感）
+        self.ai_out = QTextEdit(); self.ai_out.setReadOnly(True)
+        self.ai_out.setStyleSheet("font-size:13px; line-height:1.6;")
+
+        # 问答输入行（带历史清除按钮）
+        qa_row = QWidget()
+        qa_hl  = QHBoxLayout(qa_row); qa_hl.setContentsMargins(0, 0, 0, 0)
+        self.ai_qa_input = QLineEdit()
+        self.ai_qa_input.setPlaceholderText("向书童提问，按 Enter 发送（支持多轮对话）…")
+        self.ai_qa_input.returnPressed.connect(self._run_ai_qa)
+        self._qa_clear_btn = QPushButton("清除对话")
+        self._qa_clear_btn.setFixedWidth(72)
+        self._qa_clear_btn.clicked.connect(self._clear_qa_history)
+        qa_hl.addWidget(self.ai_qa_input)
+        qa_hl.addWidget(self._qa_clear_btn)
+
+        tab1 = QWidget(); t1v = QVBoxLayout(tab1); t1v.setContentsMargins(4, 4, 4, 4)
+        t1v.addWidget(self.ai_out)
+        t1v.addWidget(qa_row)
+
+        # Tab 2：知识图谱（WebEngine）
+        self.graph_view = QWebEngineView()
+        self.graph_view.setHtml(
+            "<body style='background:#1e1e2e;color:#666;font-family:sans-serif;"
+            "display:flex;align-items:center;justify-content:center;height:100vh;'>"
+            "<p>点击工具栏 🤖AI功能 → 知识图谱 生成图谱</p></body>")
+        tab2 = QWidget(); t2v = QVBoxLayout(tab2); t2v.setContentsMargins(0, 0, 0, 0)
+        t2v.addWidget(self.graph_view)
+
+        self.ai_tabs = QTabWidget()
+        self.ai_tabs.addTab(tab1, "💬 问答")
+        self.ai_tabs.addTab(tab2, "🕸️ 知识图谱")
+
+        right = QWidget(); rv = QVBoxLayout(right); rv.setContentsMargins(0, 0, 0, 0)
+        rv.addWidget(self.ai_tabs)
 
         self.setCentralWidget(self.view)                 # 沉浸阅读：默认全宽
         self.toc_dock = QDockWidget("目录 / 书签", self)
@@ -91,6 +143,8 @@ class MainWindow(QMainWindow):
         self._build_toolbar(); self._build_menus()
         self._rebuild_recent_menu()
         self._update_bilingual_act()
+        # 翻页方式写入 view
+        self.view._flip_effect = self.cfg.get("flip_effect", DEFAULT_FLIP_EFFECT)
         if self.bilingual_on:
             self.bilingual_dock.show()
 
@@ -98,7 +152,12 @@ class MainWindow(QMainWindow):
         self.load_bar = QProgressBar()
         self.load_bar.setRange(0, 100); self.load_bar.setFixedWidth(180)
         self.load_bar.hide()
-        self.pos_label = QLabel("0.0%"); self.pos_label.setFixedWidth(52)
+        # 进度标签点击循环切换显示模式
+        self._progress_mode = 0   # 0=全书%  1=本章页码  2=预估剩余分钟
+        self.pos_label = QLabel("0.0%"); self.pos_label.setFixedWidth(72)
+        self.pos_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pos_label.setToolTip("点击切换进度显示模式")
+        self.pos_label.mousePressEvent = lambda e: self._cycle_progress_mode()
         self.read_slider = QSlider(Qt.Orientation.Horizontal)
         self.read_slider.setRange(0, 1000); self.read_slider.setFixedWidth(220)
         self.read_slider.setToolTip("拖动跳转到指定位置")
@@ -141,10 +200,33 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addAction(self.toc_dock.toggleViewAction())   # 目录 显示/隐藏
         tb.addAction(self.ai_dock.toggleViewAction())    # AI 工具 显示/隐藏
+        # 主题快速切换色板
+        theme_btn = QToolButton(self)
+        theme_btn.setText("🎨")
+        theme_btn.setToolTip("快速切换主题")
+        theme_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.theme_menu = QMenu(self)
+        self._rebuild_theme_menu()
+        theme_btn.setMenu(self.theme_menu)
+        tb.addWidget(theme_btn)
+        tb.addSeparator()
         # 最近打开（下拉菜单）
         self.recent_menu = QMenu("最近打开", self)
         self.recent_act = tb.addAction("🕘 最近")
         self.recent_act.setMenu(self.recent_menu)
+        tb.addSeparator()
+        # AI 辅助功能组
+        ai_menu = QMenu("AI 功能", self)
+        ai_menu.addAction("📝 章节摘要", self._ai_summarize)
+        ai_menu.addAction("🗺️ 思维导图", self._ai_mindmap)
+        ai_menu.addAction("✍️ 续写建议", self._ai_continue)
+        ai_menu.addSeparator()
+        ai_menu.addAction("🕸️ 知识图谱", self._ai_knowledge_graph)
+        ai_menu.addSeparator()
+        ai_menu.addAction("😊 情感分析（选中文字）", self._ai_sentiment_selection)
+        ai_menu.addAction("🔍 背景解读（选中文字）", self._ai_background_selection)
+        self.ai_menu_act = tb.addAction("🤖 AI功能")
+        self.ai_menu_act.setMenu(ai_menu)
         # 全文搜索
         tb.addSeparator()
         self.search_box = QLineEdit()
@@ -304,31 +386,103 @@ class MainWindow(QMainWindow):
             it.setData(Qt.ItemDataRole.UserRole, off)
             self.toc.addItem(it)
 
+    # 每本书最多保留的书签数量
+    _BM_MAX = 10
+
     def add_bookmark(self):
-        if not self.book_path:
+        if not self.book_path or not self.pager:
             return
         off = self.view.left_page_offset()
         chapter = next((c.title for c in reversed(self.pager.chapters)
                         if c.start <= off), "未知章节")
+        # 优先用选中文字作预览，否则取首行文字（最多 20 字）
+        selected = self.view.selected_text().strip().replace("\n", " ")
+        preview = (selected[:20] if selected else
+                   self.full_text[off:off + 20].replace("\n", " ").strip())
+
         bms = self.bookmarks.setdefault(self.book_path, {})
-        bms[f"bm_{int(os.times().elapsed * 1000)}"] = {"chapter": chapter, "offset": off}
+        items: list = bms.get("items", [])
+
+        # 同一偏移已有书签 → 给出提示，不重复添加
+        if any(b["offset"] == off for b in items):
+            self.statusBar().showMessage("⚠️ 当前位置已有书签")
+            return
+
+        items.insert(0, {
+            "chapter": chapter,
+            "offset": off,
+            "preview": preview,
+        })
+        # 超出上限时删除最旧的
+        if len(items) > self._BM_MAX:
+            items = items[:self._BM_MAX]
+        bms["items"] = items
         save_json(BOOKMARKS_PATH, self.bookmarks)
         self._load_bookmarks()
+        self.statusBar().showMessage(
+            f"🔖 已添加书签（{len(items)}/{self._BM_MAX}）：{chapter}")
 
     def _load_bookmarks(self):
         self.bm_list.clear()
-        for k, v in self.bookmarks.get(self.book_path, {}).items():
-            if k == "_progress_":
-                continue
-            it = QListWidgetItem(f"{v['chapter']}  ·  位置{v['offset']}")
-            it.setData(Qt.ItemDataRole.UserRole, v["offset"])
+        bms = self.bookmarks.get(self.book_path, {})
+        # 兼容旧格式（dict of bm_xxx keys）
+        items = bms.get("items")
+        if items is None:
+            items = [
+                {"chapter": v["chapter"], "offset": v["offset"], "preview": ""}
+                for k, v in bms.items()
+                if k not in ("_progress_", "items") and isinstance(v, dict)
+            ]
+        for i, b in enumerate(items):
+            label = f"#{i+1}  {b['chapter']}"
+            if b.get("preview"):
+                label += f"  「{b['preview'][:15]}…」" if len(b.get("preview", "")) > 15 else f"  「{b['preview']}」"
+            it = QListWidgetItem(label)
+            it.setData(Qt.ItemDataRole.UserRole, b["offset"])
+            it.setToolTip(f"章节：{b['chapter']}\n偏移：{b['offset']}\n预览：{b.get('preview', '')}")
             self.bm_list.addItem(it)
+        # 右键删除单条书签（只连接一次，更新内容时不重复连接）
+        if not getattr(self, "_bm_ctx_connected", False):
+            self.bm_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.bm_list.customContextMenuRequested.connect(self._bm_ctx_menu)
+            self._bm_ctx_connected = True
+
+    def _bm_ctx_menu(self, pos):
+        it = self.bm_list.itemAt(pos)
+        if not it:
+            return
+        idx = self.bm_list.row(it)
+        menu = QMenu(self)
+        menu.addAction("📍 跳转到此书签",
+                       lambda: self.goto_offset(it.data(Qt.ItemDataRole.UserRole)))
+        menu.addAction("🗑️ 删除此书签", lambda: self._delete_bookmark(idx))
+        if self.bm_list.count() > 1:
+            menu.addAction("🗑️ 清空所有书签", self._clear_bookmarks)
+        menu.exec(self.bm_list.mapToGlobal(pos))
+
+    def _delete_bookmark(self, idx):
+        bms = self.bookmarks.get(self.book_path, {})
+        items: list = bms.get("items", [])
+        if 0 <= idx < len(items):
+            removed = items.pop(idx)
+            bms["items"] = items
+            save_json(BOOKMARKS_PATH, self.bookmarks)
+            self._load_bookmarks()
+            self.statusBar().showMessage(f"🗑️ 已删除书签：{removed['chapter']}")
+
+    def _clear_bookmarks(self):
+        bms = self.bookmarks.get(self.book_path, {})
+        bms["items"] = []
+        save_json(BOOKMARKS_PATH, self.bookmarks)
+        self._load_bookmarks()
+        self.statusBar().showMessage("🗑️ 已清空所有书签")
 
     def open_settings(self):
         dlg = SettingsDialog(self.cfg, self)
         if dlg.exec():
             self.cfg.update({
-                "api_key": dlg.key.text().strip(), "api_base": dlg.base.text().strip(), "model": dlg.model.text().strip(),
+                "api_key": dlg.key.text().strip(), "api_base": dlg.base.text().strip(),
+                "model": dlg.model.text().strip(), "api_version": dlg.api_version.text().strip(),
                 "font_family": dlg.font_family.currentData(),
                 "font_size": dlg.font_size.value(), "line_spacing": dlg.line_spacing.value(),
                 "para_spacing": dlg.para_spacing.value(),
@@ -337,11 +491,13 @@ class MainWindow(QMainWindow):
                 "tts_voice": dlg.tts_voice.currentData(),
                 "tts_rate": dlg.tts_rate.currentText(),
                 "theme": dlg.theme.currentText(),
+                "flip_effect": dlg.flip_effect.currentText(),
                 "bilingual": dlg.bilingual.isChecked(),
                 "bilingual_target": dlg.bilingual_target.currentText(),
             })
             save_json(CONFIG_PATH, self.cfg)
-            self.view.set_theme(THEMES.get(self.cfg["theme"], THEMES[DEFAULT_THEME]))
+            self._apply_theme(self.cfg["theme"])
+            self.view._flip_effect = self.cfg["flip_effect"]
             self.bilingual_on = bool(self.cfg["bilingual"])
             if self.bilingual_on:
                 self.bilingual_dock.show()
@@ -352,20 +508,207 @@ class MainWindow(QMainWindow):
 
     def _show_ctx_menu(self, pos):
         text = self.view.selected_text().strip()
-        if not text:
-            return
         menu = QMenu(self)
-        menu.addAction("🌐 翻译选中内容", lambda: self._run_ai(translate, text))
-        menu.addAction("📖 查词典", lambda: self._run_ai(lookup, text))
+        if text:
+            menu.addAction("🌐 翻译选中内容", lambda: self._run_ai(translate, text))
+            menu.addAction("📖 查词典", lambda: self._run_ai(lookup, text))
+            menu.addSeparator()
+            menu.addAction("😊 情感分析", lambda: self._run_ai(analyze_sentiment, text, self.cfg))
+            menu.addAction("🔍 背景解读", lambda: self._run_ai(explain_background, text, self.cfg))
+            menu.addSeparator()
+        menu.addAction("📝 章节摘要", self._ai_summarize)
+        menu.addAction("🗺️ 思维导图", self._ai_mindmap)
+        menu.addAction("🕸️ 知识图谱", self._ai_knowledge_graph)
+        menu.addAction("✍️ 续写建议", self._ai_continue)
+        menu.addSeparator()
         menu.addAction("🔖 加入书签", self.add_bookmark)
         menu.exec(self.view.mapToGlobal(pos))
 
-    def _run_ai(self, fn, text):
+    def _run_ai(self, fn, *args):
+        """通用 AI 调用：显示问答 Tab 并异步执行。"""
+        self.ai_dock.show()
+        self.ai_tabs.setCurrentIndex(0)
         self.ai_out.setPlainText("处理中……")
-        self.worker = AiWorker(fn, text, self.cfg)
+        self.worker = AiWorker(fn, *args)
         self.worker.done.connect(self.ai_out.setPlainText)
         self.worker.failed.connect(lambda m: self.ai_out.setPlainText("出错：" + m))
         threading.Thread(target=self.worker.run, daemon=True).start()
+
+    # ---- 获取当前章节文本与标题 ----
+    def _current_chapter_text(self):
+        """返回 (chapter_title, chapter_text)，无书时返回空字符串。"""
+        if not self.pager or not self.full_text:
+            return "", ""
+        ch = self.pager.chapters[self.cur_chapter]
+        return ch.title, self.full_text[ch.start:ch.end]
+
+    # ---- 📝 章节摘要 ----
+    def _ai_summarize(self):
+        if not self._check_api():
+            return
+        title, text = self._current_chapter_text()
+        if not text:
+            self.statusBar().showMessage("请先打开一本书")
+            return
+        self._run_ai(summarize_chapter, text, title, self.cfg)
+        self.statusBar().showMessage(f"📝 AI 正在生成《{title}》的摘要…")
+
+    # ---- 🗺️ 思维导图（大纲提取）----
+    def _ai_mindmap(self):
+        if not self._check_api():
+            return
+        title, text = self._current_chapter_text()
+        if not text:
+            self.statusBar().showMessage("请先打开一本书")
+            return
+        self._run_ai(extract_mindmap, text, title, self.cfg)
+        self.statusBar().showMessage(f"🗺️ AI 正在提取《{title}》的思维导图…")
+
+    # ---- ❓ AI 问答（多轮对话）----
+    def _run_ai_qa(self):
+        if not self._check_api():
+            return
+        question = self.ai_qa_input.text().strip()
+        if not question:
+            return
+        title, text = self._current_chapter_text()
+        if not text:
+            self.statusBar().showMessage("请先打开一本书")
+            return
+        # 章节切换时自动重置对话上下文
+        if title != self._qa_context_title:
+            self._qa_history.clear()
+            self._qa_context_title = title
+            self._qa_context_text  = text
+        self.ai_qa_input.clear()
+        self.ai_dock.show()
+        self.ai_tabs.setCurrentIndex(0)
+        # 在输出区展示对话历史 + 当前问题
+        self._append_qa_bubble("user", question)
+        self.ai_out.append("🤖 AI 思考中…")
+        history_snapshot = list(self._qa_history)
+        ctx_text  = self._qa_context_text
+        ctx_title = self._qa_context_title
+
+        def _do_qa():
+            return ai_qa(question, ctx_text, ctx_title, self.cfg, history=history_snapshot)
+
+        self.worker = AiWorker(_do_qa)
+        self.worker.done.connect(lambda ans: self._on_qa_done(question, ans))
+        self.worker.failed.connect(lambda m: self.ai_out.append(f"❌ 出错：{m}"))
+        threading.Thread(target=self.worker.run, daemon=True).start()
+        self.statusBar().showMessage("❓ AI 书童回答中…")
+
+    def _on_qa_done(self, question: str, answer: str):
+        """问答完成：更新对话历史并显示回答。"""
+        # 将本轮记入历史（保留最近20轮，避免 token 爆算）
+        self._qa_history.append(("user",      question))
+        self._qa_history.append(("assistant", answer))
+        if len(self._qa_history) > 40:
+            self._qa_history = self._qa_history[-40:]
+        # 删掉“AI 思考中…”那行
+        cur = self.ai_out.toPlainText()
+        if cur.endswith("🤖 AI 思考中…"):
+            self.ai_out.setPlainText(cur[: -len("🤖 AI 思考中…")].rstrip())
+        self._append_qa_bubble("assistant", answer)
+
+    def _append_qa_bubble(self, role: str, text: str):
+        """在 ai_out 里追加对话气泡（纯文本模拟）。"""
+        prefix = "💬 你" if role == "user" else "🤖 书童"
+        separator = "─" * 30
+        self.ai_out.append(f"\n{prefix}\n{text}\n{separator}")
+        # 滚动到底部
+        sb = self.ai_out.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _clear_qa_history(self):
+        """\u6e05除对话历史并重置上下文。"""
+        self._qa_history.clear()
+        self._qa_context_title = ""
+        self._qa_context_text  = ""
+        self.ai_out.clear()
+        self.statusBar().showMessage("🗑️ 对话历史已清除")
+
+    # ---- 🕸️ 知识图谱 ----
+    def _ai_knowledge_graph(self):
+        if not self._check_api():
+            return
+        title, text = self._current_chapter_text()
+        if not text:
+            self.statusBar().showMessage("请先打开一本书")
+            return
+        self.ai_dock.show()
+        self.ai_tabs.setCurrentIndex(1)          # 切换到图谱 Tab
+        self.graph_view.setHtml(
+            "<body style='background:#1e1e2e;color:#aaa;font-family:sans-serif;"
+            "display:flex;align-items:center;justify-content:center;height:100vh;'>"
+            "<p>⚙️ AI 正在提取知识图谱…</p></body>")
+        self.statusBar().showMessage(f"🕸️ AI 正在构建《{title}》的知识图谱…")
+
+        def _build():
+            return extract_knowledge_graph(text, title, self.cfg)
+
+        def _on_done(graph_json: str):
+            html = build_graph_html(graph_json, title)
+            import tempfile, os as _os
+            _tmp = _os.path.join(tempfile.gettempdir(), "pyreader_graph.html")
+            with open(_tmp, "w", encoding="utf-8") as _f:
+                _f.write(html)
+            self.graph_view.load(QUrl.fromLocalFile(_tmp))
+            self.statusBar().showMessage(f"🕸️ 知识图谱已生成：《{title}》")
+
+        def _on_fail(msg: str):
+            from .graph import _error_html
+            self.graph_view.setHtml(_error_html(msg))
+            self.statusBar().showMessage(f"❌ 知识图谱失败：{msg[:60]}")
+
+        self.worker = AiWorker(_build)
+        self.worker.done.connect(_on_done)
+        self.worker.failed.connect(_on_fail)
+        threading.Thread(target=self.worker.run, daemon=True).start()
+
+    # ---- ✍️ 续写建议 ----
+    def _ai_continue(self):
+        if not self._check_api():
+            return
+        _, text = self._current_chapter_text()
+        if not text:
+            self.statusBar().showMessage("请先打开一本书")
+            return
+        # 取当前页附近的文字作为续写上文
+        off = self.view.left_page_offset()
+        snippet = self.full_text[max(0, off - 500):off + 500]
+        self._run_ai(continue_story, snippet, self.cfg)
+        self.statusBar().showMessage("✍️ AI 正在生成续写建议…")
+
+    # ---- 😊 情感分析（选中文字）----
+    def _ai_sentiment_selection(self):
+        if not self._check_api():
+            return
+        text = self.view.selected_text().strip()
+        if not text:
+            self.statusBar().showMessage("请先选中一段文字")
+            return
+        self._run_ai(analyze_sentiment, text, self.cfg)
+        self.statusBar().showMessage("😊 AI 情感分析中…")
+
+    # ---- 🔍 背景解读（选中文字）----
+    def _ai_background_selection(self):
+        if not self._check_api():
+            return
+        text = self.view.selected_text().strip()
+        if not text:
+            self.statusBar().showMessage("请先选中一段文字")
+            return
+        self._run_ai(explain_background, text, self.cfg)
+        self.statusBar().showMessage("🔍 AI 背景解读中…")
+
+    # ---- 通用：检查 API Key ----
+    def _check_api(self):
+        if not self.cfg.get("api_key"):
+            self.statusBar().showMessage("该功能需要先配置 API Key（工具栏→设置）")
+            return False
+        return True
 
     # ---- 双语翻译（朗读时 AI 翻译）----
     def toggle_bilingual(self):
@@ -628,6 +971,11 @@ class MainWindow(QMainWindow):
             return
         self.goto_offset(off)
 
+    def _cycle_progress_mode(self):
+        """pos_label 点击循环：全书% → 本章页码 → 预估剩余分钟 → 循环"""
+        self._progress_mode = (self._progress_mode + 1) % 3
+        self._update_status()
+
     def _update_status(self):
         if self.pager and self.full_text:
             off = self.view.left_page_offset()
@@ -638,12 +986,30 @@ class MainWindow(QMainWindow):
             self.read_slider.blockSignals(True)
             self.read_slider.setValue(int(pct * 10))
             self.read_slider.blockSignals(False)
-            self.pos_label.setText(f"{pct:.1f}%")
-            # 页眉/页码数据
+            # 页碉/页码数据
             ch = self.pager.chapters[self.cur_chapter]
             self.view.chapter_title = ch.title
             pages = self.pager.pages_of(self.cur_chapter)
             self.view.chars_per_page = max(1, (ch.end - ch.start) / max(1, len(pages))) if pages else 400.0
+            # 根据模式更新进度标签
+            mode = getattr(self, "_progress_mode", 0)
+            if mode == 1:
+                # 本章页码
+                cur_pg  = self.view.spread + 1
+                tot_pg  = max(1, (len(pages) + 1) // 2)
+                label   = f"{cur_pg}/{tot_pg}页"
+                tip     = "本章页码（点击切换）"
+            elif mode == 2:
+                # 预估剩余分钟（按平均阅读速度 400字/分钟计算）
+                chars_left = max(0, len(self.full_text) - off)
+                mins = chars_left / 400
+                label = (f"{int(mins)}分钟" if mins >= 1 else "<1分钟")
+                tip   = "预估剩余阅读时间（点击切换）"
+            else:
+                label = f"{pct:.1f}%"
+                tip   = "全书阅读进度（点击切换）"
+            self.pos_label.setText(label)
+            self.pos_label.setToolTip(tip)
             self.view.update()
 
     # ---- 全文搜索 ----
@@ -749,6 +1115,33 @@ class MainWindow(QMainWindow):
         self.cfg["recent"] = rec[:8]
         save_json(CONFIG_PATH, self.cfg)
         self._rebuild_recent_menu()
+
+    # ---- 主题快速切换 ----
+    def _rebuild_theme_menu(self):
+        """(重新)构建主题色板菜单，每个条目左侧匹配一个彩色小色块。"""
+        self.theme_menu.clear()
+        cur = self.cfg.get("theme", DEFAULT_THEME)
+        for name, colors in THEMES.items():
+            action = self.theme_menu.addAction(name, lambda n=name: self._apply_theme(n))
+            # 用页面和文字颜色渲染小色块图标
+            pm = QPixmap(16, 16)
+            pm.fill(QColor(colors["page"]))
+            _p = QPainter(pm)
+            _p.fillRect(2, 6, 12, 4, QColor(colors["text"]))
+            _p.end()
+            action.setIcon(QIcon(pm))
+            if name == cur:
+                action.setCheckable(True)
+                action.setChecked(True)
+
+    def _apply_theme(self, name: str):
+        """立即切换主题，保存配置，刷新工具栏菜单勾选状态。"""
+        self.cfg["theme"] = name
+        save_json(CONFIG_PATH, self.cfg)
+        self.view.set_theme(THEMES.get(name, THEMES[DEFAULT_THEME]))
+        self._rebuild_theme_menu()
+        self.view.update()
+        self.statusBar().showMessage(f"🎨 已切换主题：{name}")
 
     # ---- 进度条拖动跳转 ----
     def _on_slider_move(self, val):

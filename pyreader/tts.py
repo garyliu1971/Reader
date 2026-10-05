@@ -108,23 +108,60 @@ def synthesize_tts_piper(text: str, voice_id: str, rate: str) -> bytes:
     return buf.getvalue()
 
 def split_sentences(text: str, base: int = 0):
-    """把文本切成句子：返回 [(起始偏移, 结束偏移, 句子文本)]，偏移为全局字符偏移。"""
+    """把文本切成句子：返回 [(起始偏移, 结束偏移, 句子文本)]，偏移为全局字符偏移。
+
+    断句规则（按优先级）：
+      1. 中文标点 。！？；  / 换行  → 立即断
+      2. 英文句末：'. '/'! '/'? ' 后接大写或数字 → 断在空格后
+      3. 超长兜底（120字符）→ 向后找最近空格断，避免从单词中间截断
+    """
     res = []
     seg_start = 0
     i = 0
     n = len(text)
-    buf_len = 0
+    MAX_LEN = 120   # 兜底截断阈值（字符数）
+
     while i < n:
         ch = text[i]
-        buf_len += 1
-        if ch in "。！？!?；;" or ch == "\n" or buf_len >= 100:
+        buf_len = i - seg_start + 1
+
+        # 规则1：中文标点 / 换行 → 立即断
+        if ch in "。！？；" or ch == "\n":
             end = i + 1
             seg = text[seg_start:end]
             if seg.strip():
                 res.append((base + seg_start, base + end, seg))
             seg_start = end
-            buf_len = 0
+            i = end
+            continue
+
+        # 规则2：英文句末标点（. ! ?）后接空格+大写/数字 → 断在标点后，空格归下一句
+        if ch in ".!?" and i + 2 < n and text[i + 1] == " " and (text[i + 2].isupper() or text[i + 2].isdigit()):
+            end = i + 2          # 断在空格，下一句从大写字母开始（空格被包含进当前句，strip 后不影响 TTS）
+            seg = text[seg_start:end]
+            if seg.strip():
+                res.append((base + seg_start, base + end, seg))
+            seg_start = end
+            i = end
+            continue
+
+        # 规则3：超长兜底 → 向后找最近空格，找不到就硬断
+        if buf_len >= MAX_LEN:
+            # 向后最多扫 20 字符找空格
+            cut = i + 1
+            for j in range(i + 1, min(i + 21, n)):
+                if text[j] == " ":
+                    cut = j + 1   # 断在空格之后（空格归下一句开头，strip 掉）
+                    break
+            seg = text[seg_start:cut]
+            if seg.strip():
+                res.append((base + seg_start, base + cut, seg))
+            seg_start = cut
+            i = cut
+            continue
+
         i += 1
+
     if seg_start < n:
         seg = text[seg_start:n]
         if seg.strip():

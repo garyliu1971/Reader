@@ -40,7 +40,15 @@ class PageView(QWidget):
         self._flip_from = 0             # 动画起始 spread
         self._flip_rect = None          # 翻动页的起始矩形
         self._flip_snaps = {}           # {'front': QPixmap, 'back': QPixmap}
+        self._flip_effect = "3D 翻书"  # 当前翻页方式，由 MainWindow 写入
+        # 平移动画用快照
+        self._slide_snap_from: QPixmap | None = None
+        self._slide_snap_to:   QPixmap | None = None
         self.sel_start = self.sel_end = -1
+        # 双游标状态
+        self._cur_l_rect: QRectF | None = None   # 左游标屏幕矩形
+        self._cur_r_rect: QRectF | None = None   # 右游标屏幕矩形
+        self._dragging_cursor: str | None = None  # 'L' | 'R' | None
         self.read_start = self.read_end = -1   # 朗读高亮范围
         self.search_starts = []                # 搜索匹配起始偏移列表
         self.search_len = 0
@@ -113,9 +121,15 @@ class PageView(QWidget):
         total = (len(self.pages) + 1) // 2
         ns = self.spread + delta
         if ns < 0:
-            self.needChapter.emit(-1, True)       # 去上一章末页
+            self.needChapter.emit(-1, True)
         elif ns >= total:
-            self.needChapter.emit(1, False)       # 去下一章首页
+            self.needChapter.emit(1, False)
+        elif self._flip_effect == "直接切换":
+            self.spread = ns
+            self.pageChanged.emit(self.left_page_offset())
+            self.update()
+        elif self._flip_effect == "平移滑动":
+            self._start_slide(ns, delta)
         else:
             self._start_flip(ns, delta)
 
@@ -128,6 +142,57 @@ class PageView(QWidget):
             self._flip_anim = None
         self._flip_dir = 0
         self._flip_snaps = {}
+        self._slide_snap_from = self._slide_snap_to = None
+
+    # ---- 平移滑动翻页 ----
+    def _grab_spread(self) -> QPixmap:
+        """将当前双页截屏为 QPixmap（平移动画用）。"""
+        pm = QPixmap(self.size())
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        self._draw_background(painter)
+        left, right = self.page_rects()
+        self._draw_book_stack(painter, left, right)
+        self._draw_gutter_shadow(painter, left, right)
+        li, ri = self.spread * 2, self.spread * 2 + 1
+        if li < len(self.pages):
+            self._draw_page(painter, left, self.pages[li], self.book_title,
+                            spine_side=self._spine_side(li))
+        if ri < len(self.pages):
+            self._draw_page(painter, right, self.pages[ri], self.chapter_title,
+                            spine_side=self._spine_side(ri))
+        painter.end()
+        return pm
+
+    def _start_slide(self, target: int, direction: int):
+        self._slide_snap_from = self._grab_spread()
+        self.spread = target                    # 切换到新页
+        self._slide_snap_to = self._grab_spread()
+        self.spread = target - direction        # 恢复，由动画进度控制显示
+        self._flip_dir = 1 if direction > 0 else -1
+        self._flip_t = 0.0
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(FLIP_MS)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.valueChanged.connect(self._on_flip_tick)
+        anim.finished.connect(lambda: self._finish_slide(target))
+        self._flip_anim = anim
+        anim.start()
+        self.update()
+
+    def _finish_slide(self, target: int):
+        if self._flip_anim is not None:
+            self._flip_anim.deleteLater()
+            self._flip_anim = None
+        self._flip_dir = 0
+        self._slide_snap_from = self._slide_snap_to = None
+        self.spread = target
+        self.pageChanged.emit(self.left_page_offset())
+        self.update()
 
     def _header_for(self, idx):
         """按页在书中的位置（奇偶）返回页眉：左页=书名，右页=章节。"""
@@ -298,7 +363,15 @@ class PageView(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         self._draw_background(p)
         left, right = self.page_rects()
-        if self._flip_anim is not None:
+        if self._flip_anim is not None and self._slide_snap_from is not None:
+            # 平移滑动动画
+            W = float(self.width())
+            offset = int(W * self._flip_t * self._flip_dir)   # 约分配给 from
+            # from 页向左滑出（向前）／to 页从右滑入
+            p.drawPixmap(QPointF(-offset * self._flip_dir, 0), self._slide_snap_from)
+            p.drawPixmap(QPointF(W * self._flip_dir - offset * self._flip_dir, 0),
+                         self._slide_snap_to)
+        elif self._flip_anim is not None:
             self._draw_flip(p, left, right)
         else:
             self._draw_book_stack(p, left, right)
@@ -393,6 +466,57 @@ class PageView(QWidget):
         s, e = max(ln.start, self.sel_start), min(ln.end, self.sel_end)
         if s < e:
             p.fillRect(QRectF(line_x + dpos(s), y, dpos(e) - dpos(s), lh), QColor("#cfe3ff"))
+
+    # ---- 双游标手柄（蓝色竖线 + 圆点）----
+    _CUR_W   = 2.0    # 游标竖线宽度
+    _CUR_R   = 5.0    # 圆点半径
+    _CUR_HIT = 14.0   # 点击命中的宽容半径
+
+    def _draw_cursors(self, p: QPainter, rect: QRectF, page):
+        """在选区左/右端各画一个可拖拽游标手柄（竖线 + 圆点）。"""
+        if not (0 <= self.sel_start < self.sel_end):
+            self._cur_l_rect = self._cur_r_rect = None
+            return
+
+        col = QColor("#1a73e8")
+        pen = QPen(col, self._CUR_W)
+        R   = self._CUR_R
+
+        fm = QFontMetricsF(self.font)
+        tx = rect.left() + self.margin_x
+        y  = rect.top()  + self.margin_y
+
+        for ln in page.lines:
+            lh    = ln.height if ln.height else self.line_h
+            lfont = self._line_font(ln)
+            lfm   = fm if lfont is self.font else QFontMetricsF(lfont)
+            ix    = ln.indent if ln.indent else 0.0
+            line_x = tx + ix
+
+            def dpos(src, _lfm=lfm, _ln=ln):
+                return _lfm.horizontalAdvance(_ln.text[:_line_src_to_disp(_ln, src)])
+
+            # 左游标：选区起始端
+            if ln.start <= self.sel_start < ln.end:
+                cx = line_x + dpos(self.sel_start)
+                p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawLine(QPointF(cx, y), QPointF(cx, y + lh))
+                p.setBrush(col); p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPointF(cx, y), R, R)          # 圆点在竖线上方
+                self._cur_l_rect = QRectF(cx - self._CUR_HIT, y - self._CUR_HIT,
+                                          self._CUR_HIT * 2, lh + self._CUR_HIT * 2)
+
+            # 右游标：选区结束端
+            if ln.start < self.sel_end <= ln.end:
+                cx = line_x + dpos(self.sel_end)
+                p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawLine(QPointF(cx, y), QPointF(cx, y + lh))
+                p.setBrush(col); p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPointF(cx, y + lh), R, R)     # 圆点在竖线下方
+                self._cur_r_rect = QRectF(cx - self._CUR_HIT, y - self._CUR_HIT,
+                                          self._CUR_HIT * 2, lh + self._CUR_HIT * 2)
+
+            y += lh + ln.gap_after
 
     def _draw_runs(self, p, ln, lfont, line_x, y, asc):
         base = QColor(MD_QUOTE_COLOR) if ln.style == "quote" else QColor(self.text_color)
@@ -566,6 +690,8 @@ class PageView(QWidget):
                    int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
                    f"{pg} / {total}")
         p.setFont(self.font)
+        # 双游标手柄
+        self._draw_cursors(p, rect, page)
 
     def _hit(self, pos):
         left, right = self.page_rects()
@@ -595,16 +721,52 @@ class PageView(QWidget):
                 return _line_disp_to_src(ln, lo)
         return None
 
+    def _cursor_hit(self, pos) -> str | None:
+        """pos 命中左游标返回 'L'，命中右游标返回 'R'，否则 None。"""
+        if self._cur_l_rect and self._cur_l_rect.contains(pos):
+            return 'L'
+        if self._cur_r_rect and self._cur_r_rect.contains(pos):
+            return 'R'
+        return None
+
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._press_pos = e.position()
-            self._dragged = False
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = e.position()
+        # 优先检测是否点中了游标手柄
+        cur = self._cursor_hit(pos)
+        if cur and 0 <= self.sel_start < self.sel_end:
+            self._dragging_cursor = cur
+            self._dragged = True
+            return
+        self._dragging_cursor = None
+        self._press_pos = pos
+        self._dragged = False
 
     def mouseMoveEvent(self, e):
+        pos = e.position()
+
+        # 拖动游标手柄模式
+        if self._dragging_cursor:
+            off = self._hit(pos)
+            if off is not None:
+                if self._dragging_cursor == 'L':
+                    new_s = min(off, self.sel_end - 1)
+                    if new_s != self.sel_start:
+                        self.sel_start = new_s
+                        self.update()
+                else:
+                    new_e = max(off, self.sel_start + 1)
+                    if new_e != self.sel_end:
+                        self.sel_end = new_e
+                        self.update()
+            self.setCursor(Qt.CursorShape.IBeamCursor)
+            return
+
         moved = self._press_pos is not None and \
-                (e.position() - self._press_pos).manhattanLength() > 6
+                (pos - self._press_pos).manhattanLength() > 6
         if not self.selecting and moved:
-            # 拖动才开始选字（避免长按/单击闪烁高亮）
+            # 拖动才开始选字（避免单击闪烁高亮）
             off = self._hit(self._press_pos)
             if off is not None:
                 self.selecting = True
@@ -613,23 +775,33 @@ class PageView(QWidget):
                 self._dragged = True
         if self.selecting:
             if moved:
-                self._dragged = True          # 拖动 = 选字
-            off = self._hit(e.position())
+                self._dragged = True
+            off = self._hit(pos)
             if off is not None:
                 self.sel_end = off
                 self.update()
         else:
-            # 悬停：左右两侧显示手型，提示可点击翻页
-            w = self.width(); x = e.position().x()
+            # 悬停游标外观
+            if self._cursor_hit(pos) and 0 <= self.sel_start < self.sel_end:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)  # 游标上显示左右拖拽光标
+                return
+            w = self.width(); x = pos.x()
             if x < w * CLICK_ZONE or x > w * (1 - CLICK_ZONE):
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
             else:
                 l, r = self.page_rects()
                 self.setCursor(Qt.CursorShape.IBeamCursor
-                               if (l.contains(e.position()) or r.contains(e.position()))
+                               if (l.contains(pos) or r.contains(pos))
                                else Qt.CursorShape.ArrowCursor)
 
     def mouseReleaseEvent(self, e):
+        # 结束游标拖动
+        if self._dragging_cursor:
+            self._dragging_cursor = None
+            self._dragged = False
+            self.update()
+            return
+
         dragged = self._dragged
         self.selecting = False
         self._dragged = False
@@ -642,6 +814,7 @@ class PageView(QWidget):
         if e.button() == Qt.MouseButton.LeftButton:      # 单击（未拖动）= 翻页
             w = self.width(); x = e.position().x()
             self.sel_start = self.sel_end = -1           # 单击清除选择
+            self._cur_l_rect = self._cur_r_rect = None
             if x < w * CLICK_ZONE:
                 self.flip(-1)                            # 点左侧 → 上一页
             elif x > w * (1 - CLICK_ZONE):
