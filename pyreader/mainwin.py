@@ -4,8 +4,8 @@ import threading
 import time as _time
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon, QDesktopServices, QKeySequence
-from PySide6.QtWidgets import (QMainWindow, QWidget, QListWidget, QListWidgetItem,
+from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon, QDesktopServices, QKeySequence, QCursor
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
                                QToolBar, QMenu, QFontDialog, QTextEdit, QVBoxLayout, QLabel,
                                QFileDialog, QMessageBox, QProgressBar, QSlider, QDockWidget,
                                QLineEdit, QToolButton, QWidgetAction, QHBoxLayout, QFrame,
@@ -295,6 +295,7 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self):
         tb = QToolBar(); self.addToolBar(tb)
+        self._toolbar = tb
 
         def R(act):                       # 登记「依赖阅读页」的动作：书架可见时禁用
             self._reader_acts.append(act)
@@ -302,6 +303,7 @@ class MainWindow(QMainWindow):
         tb.addAction("打开", self.open_book)
         tb.addAction("字体", self.choose_font)
         tb.addAction("设置", self.open_settings)
+        tb.addAction("⛶ 全屏", self.toggle_fullscreen).setToolTip("全屏阅读 (F11)；全屏时鼠标移到顶部显示工具栏")
         tb.addSeparator()
         R(tb.addAction("◀ 上一页", lambda: self.view.flip(-1)))
         R(tb.addAction("下一页 ▶", lambda: self.view.flip(1)))
@@ -1940,8 +1942,55 @@ class MainWindow(QMainWindow):
         self.goto_offset(off)
         self._update_status()
 
+    # ---- 全屏：工具栏收起，鼠标移到窗口顶部才浮出（悬浮覆盖，不挤占阅读区，所以不会触发重排）----
+    _FS_TOP_BAND = 40       # 顶部悬停触发区高度（像素）
+
+    def toggle_fullscreen(self):
+        tb = self._toolbar
+        if not self.isFullScreen():
+            self._fs_was_max = self.isMaximized()
+            self.removeToolBar(tb)           # 脱离主窗口布局，作为子控件浮在阅读区上方
+            tb.setParent(self)
+            tb.hide()
+            self.statusBar().hide()
+            self.showFullScreen()
+            if getattr(self, "_fs_timer", None) is None:
+                self._fs_timer = QTimer(self)
+                self._fs_timer.setInterval(120)
+                self._fs_timer.timeout.connect(self._fs_tick)
+            self._fs_timer.start()
+        else:
+            self._fs_timer.stop()
+            tb.hide()
+            self.addToolBar(tb)              # 回到原来的停靠位置
+            tb.show()
+            self.statusBar().show()
+            if getattr(self, "_fs_was_max", False):
+                self.showMaximized()
+            else:
+                self.showNormal()
+
+    def _fs_tick(self):
+        if not self.isFullScreen():
+            return
+        tb = self._toolbar
+        y = self.mapFromGlobal(QCursor.pos()).y()
+        inside = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        popup = QApplication.activePopupWidget() is not None   # 工具栏的菜单（如「定时」）展开时别收起
+        if tb.isVisible():
+            if popup or (inside and y <= tb.height() + 10):
+                return
+            tb.hide()
+        elif inside and y <= self._FS_TOP_BAND and self.isActiveWindow():
+            tb.setGeometry(0, 0, self.width(), tb.sizeHint().height())
+            tb.show()
+            tb.raise_()
+
     def keyPressEvent(self, e):
         ctrl = bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if e.key() == Qt.Key.Key_F11:
+            self.toggle_fullscreen()
+            return
         if self._shelf_visible():
             # 书架可见：翻页键 / F3 绝不传给隐藏的阅读页（否则会翻页、触发 pageChanged 与进度推送）；Ctrl+F 聚焦书架自己的搜索框
             if e.key() == Qt.Key.Key_F and ctrl:
