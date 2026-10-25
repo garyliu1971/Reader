@@ -209,6 +209,7 @@ def win(monkeypatch):
     w.resize(1000, 700)
     w.show()
     QApplication.processEvents()
+    w.cfg["audio_autoplay"] = False        # 既有用例假设「打开不自动播」；自动播放见 test_audio_autoplay_*
     w.pushed, w.pulled, w.external = [], [], []
     monkeypatch.setattr(w.sync, "push", lambda cfg, rec: w.pushed.append(rec))
     monkeypatch.setattr(w.sync, "pull", lambda cfg, path: w.pulled.append(path))
@@ -543,6 +544,29 @@ def test_audio_open_without_playing_keeps_timestamp_and_accepts_newer_remote(win
     assert win.bookmarks[p]["_progress_ms"] == 6500
     win.show_shelf()
     assert win.pushed == []                                                         # 没动过：离开也不推
+
+
+@needs_audio
+def test_audio_autoplay_starts_playing_when_sync_disabled(win, tmp_path):
+    p = write_wav(tmp_path / "ap.wav", 12)
+    win.cfg["audio_autoplay"] = True
+    win.load_book(p)                                                                # 同步没启用（pull 为空操作）：马上播
+    assert wait_for(lambda: win.audio.is_playing())
+    win.show_shelf()
+
+
+@needs_audio
+def test_audio_autoplay_waits_for_remote_position_then_plays(win, tmp_path, monkeypatch):
+    p = write_wav(tmp_path / "aw.wav", 12)
+    win.cfg["audio_autoplay"] = True
+    monkeypatch.setattr(win.sync, "pull", lambda cfg, path: object())             # 模拟已启用同步：远端结果还没回来
+    win.load_book(p)
+    assert wait_for(lambda: win.audio.duration_ms() > 0)
+    wait_for(lambda: False, 0.5)
+    assert not win.audio.is_playing()                                               # 还在等远端位置
+    win._on_remote_progress(p, sync.make_media_record(sync.book_id(p), "audio", 50.0, "phone", pos_ms=4000, updated=time.time()))
+    assert wait_for(lambda: win.audio.is_playing() and win.audio.position_ms() >= 3500)
+    win.show_shelf()
 
 
 @needs_audio
