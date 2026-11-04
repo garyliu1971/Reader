@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 
 from . import shelf as sh
 from . import shelfsync as ss
-from .webdav import client_from_cfg
+from .webdav import client_from_cfg, library_sources
 
 SMART = (("all", "全部"), ("recent", "最近阅读"), ("reading", "在读"), ("done", "已读完"), ("fav", "收藏"))   # 智能书架
 SORT_LABELS = (("last_read", "最近阅读"), ("title", "书名"), ("added", "最近添加"), ("progress", "进度"), ("size", "大小"))
@@ -1246,8 +1246,8 @@ class ShelfView(QWidget):
         return cfg if isinstance(cfg, dict) else {}
 
     def cloud_enabled(self) -> bool:
-        """WebDAV 已启用且地址非空。未启用时整个云端流程都是空操作，界面上也没有云相关角标 / 提示。"""
-        return client_from_cfg(self._cfg()) is not None
+        """有至少一个可用的书库源（主源或额外只读源）。未启用时整个云端流程都是空操作，界面上也没有云相关角标 / 提示。"""
+        return bool(library_sources(self._cfg()))
 
     def cloud_status_text(self) -> str:
         if self._cloud_busy:
@@ -1276,9 +1276,9 @@ class ShelfView(QWidget):
         return self.sync_cloud(force=False)
 
     def sync_cloud(self, force: bool = False) -> bool:
-        """后台读取云端 library/ 并并入书架。未启用云端是空操作；非 force 时 60 秒内不重复。"""
+        """后台读取所有书库源的 library/ 并并入书架。没有任何可用源是空操作；非 force 时 60 秒内不重复。"""
         cfg = self._cfg()
-        if client_from_cfg(cfg) is None:
+        if not library_sources(cfg):
             return False
         now = time.monotonic()
         if not force and self._cloud_tick is not None and now - self._cloud_tick < CLOUD_STALE_SECONDS:
@@ -1325,7 +1325,7 @@ class ShelfView(QWidget):
         """后台下载云端书到 remote_books/。open_when_done：完成后打开（仅当这个请求仍是最新的打开意图、
         书架仍在前台时才会打开：迟到 / 过期的完成事件只缓存文件，不会劫持当前窗口）。"""
         cfg = self._cfg()
-        if client_from_cfg(cfg) is None:
+        if not library_sources(cfg):
             self._notice = "未启用云同步，无法下载"
             self._update_status()
             return False

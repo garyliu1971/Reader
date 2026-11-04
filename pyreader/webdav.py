@@ -31,7 +31,7 @@ JSON_MAX_BYTES = 1024 * 1024             # 设备文件 / 进度文件这类小 
 # list_tree 资源上限
 MAX_DIRS = 500
 MAX_DEPTH = 8
-MAX_FILES = 2000
+MAX_FILES = 10000
 
 
 class WebDavError(Exception):
@@ -109,12 +109,23 @@ def _cmp_key(s: str) -> str:
     return unicodedata.normalize("NFC", s).casefold()
 
 
+def _normalize_url(url: str) -> str:
+    """把 URL 里 path 的非 ASCII 字符按 UTF-8 百分比编码（urllib 不会自动编码，直接传中文会抛
+    UnicodeEncodeError，如 alist 挂载路径 /dav/夸克）。保留已编码的 %XX 与保留字符，不双编码。"""
+    try:
+        u = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url
+    path = urllib.parse.quote(u.path, safe="/%:@!$&'()*+,;=-._~[]")
+    return urllib.parse.urlunsplit((u.scheme, u.netloc, path, u.query, u.fragment))
+
+
 class WebDavClient:
     def __init__(self, base_url: str, user: str = "", password: str = "", timeout: float = 20,
                  allow_insecure_auth: bool = False):
         """allow_insecure_auth=False：目标是 http:// 公网主机时拒绝发送凭据（默认；
         设置页勾选「允许明文 http 发送密码」才会传 True）。"""
-        self.base = (base_url or "").strip().rstrip("/")
+        self.base = _normalize_url((base_url or "").strip()).rstrip("/")
         self.user = user or ""
         self.password = password or ""
         self.timeout = timeout
@@ -430,8 +441,40 @@ class WebDavClient:
 
 
 def client_from_cfg(cfg: dict) -> Optional[WebDavClient]:
-    """未启用或 url 为空 → None（调用方一律视为 no-op）。"""
+    """主书库（进度同步 / 上传目标）。未启用或 url 为空 → None（调用方一律视为 no-op）。"""
     if not cfg.get("webdav_enabled") or not (cfg.get("webdav_url") or "").strip():
         return None
     return WebDavClient(cfg["webdav_url"], cfg.get("webdav_user", ""), cfg.get("webdav_password", ""),
                         allow_insecure_auth=bool(cfg.get("webdav_allow_insecure", False)))
+
+
+def client_from_source(src: dict) -> Optional[WebDavClient]:
+    """从单个书库源字典建客户端（url 为空返回 None）。"""
+    if not isinstance(src, dict) or not (src.get("url") or "").strip():
+        return None
+    return WebDavClient(src["url"], src.get("user", ""), src.get("password", ""),
+                        allow_insecure_auth=bool(src.get("allow_insecure", False)))
+
+
+def library_sources(cfg: dict) -> List[dict]:
+    """所有启用的书库源（主源在前，额外的只读源在后）。每项：
+    {id, name, url, user, password, allow_insecure}。主源的 id 为空字符串（其 rel 不带前缀，兼容旧数据）；
+    额外源以 name 作为命名空间前缀（safe_segment 允许中文，name 会直接成为书架 cloud:<name>/… 目录前缀）。
+    坏条目（name 不合法 / url 为空 / 未启用）一律跳过。"""
+    out: List[dict] = []
+    if cfg.get("webdav_enabled") and (cfg.get("webdav_url") or "").strip():
+        out.append({"id": "", "name": "主书库",
+                    "url": cfg["webdav_url"], "user": cfg.get("webdav_user", ""),
+                    "password": cfg.get("webdav_password", ""),
+                    "allow_insecure": bool(cfg.get("webdav_allow_insecure", False))})
+    for s in cfg.get("webdav_libraries", []) or []:
+        if not isinstance(s, dict) or not s.get("enabled", True):
+            continue
+        name = safe_segment((s.get("name") or "").strip())
+        if not name or is_hidden_name(name) or not (s.get("url") or "").strip():
+            continue
+        out.append({"id": name, "name": name,
+                    "url": (s["url"] or "").strip(),
+                    "user": s.get("user", ""), "password": s.get("password", ""),
+                    "allow_insecure": bool(s.get("allow_insecure", False))})
+    return out

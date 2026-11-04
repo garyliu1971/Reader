@@ -1,10 +1,57 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QComboBox, QLineEdit, QCheckBox, QDoubleSpinBox,
                                QSpinBox, QFormLayout, QDialogButtonBox, QLabel,
-                               QVBoxLayout, QScrollArea, QWidget, QFrame, QTabWidget)
+                               QVBoxLayout, QHBoxLayout, QScrollArea, QWidget, QFrame, QTabWidget,
+                               QListWidget, QListWidgetItem, QPushButton, QMessageBox)
 from PySide6.QtGui import QGuiApplication
 from .config import AI_PRESETS, THEMES, DEFAULT_THEME, FLIP_EFFECTS, DEFAULT_FLIP_EFFECT
 from .tts import TTS_VOICES, TTS_DEFAULT_VOICE, TTS_RATES, winrt_voices, sapi_voices
 from .shelfview import SORT_LABELS as SHELF_SORT_LABELS
+
+
+# ============ 额外书库源编辑对话框 ============
+class _DavSourceDialog(QDialog):
+    """编辑一个额外的只读 WebDAV 书库（name 兼作书架目录前缀 / 命名空间）。"""
+
+    def __init__(self, src=None, parent=None):
+        super().__init__(parent)
+        src = src if isinstance(src, dict) else {}
+        self.setWindowTitle("编辑额外书库" if src else "添加额外书库")
+        self.name = QLineEdit(src.get("name", ""))
+        self.name.setPlaceholderText("书架里显示的目录名，如 夸克网盘（不能含 / \\ :，不能以 . 或 ~$ 开头）")
+        self.url = QLineEdit(src.get("url", ""))
+        self.url.setPlaceholderText("如 http://192.168.1.5:5244/dav（alist 的 WebDAV 端点）")
+        self.user = QLineEdit(src.get("user", ""))
+        self.user.setPlaceholderText("匿名服务器可留空")
+        self.password = QLineEdit(src.get("password", ""))
+        self.password.setEchoMode(QLineEdit.Password)
+        self.allow_insecure = QCheckBox("允许明文 http 向公网主机发送密码（不安全，建议用 https）")
+        self.allow_insecure.setChecked(bool(src.get("allow_insecure", False)))
+        self.enabled = QCheckBox("启用该书库")
+        self.enabled.setChecked(bool(src.get("enabled", True)))
+        form = QFormLayout()
+        form.addRow("名称", self.name)
+        form.addRow("WebDAV 地址", self.url)
+        form.addRow("用户名", self.user)
+        form.addRow("密码", self.password)
+        form.addRow("", self.allow_insecure)
+        form.addRow("", self.enabled)
+        btn = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn.accepted.connect(self.accept)
+        btn.rejected.connect(self.reject)
+        lay = QVBoxLayout(self)
+        lay.addLayout(form)
+        lay.addWidget(btn)
+        self.resize(560, self.sizeHint().height())
+
+    def result_source(self) -> dict:
+        return {"name": self.name.text().strip(),
+                "url": self.url.text().strip(),
+                "user": self.user.text().strip(),
+                "password": self.password.text(),
+                "allow_insecure": self.allow_insecure.isChecked(),
+                "enabled": self.enabled.isChecked()}
+
 
 # ============ 设置对话框 ============
 class SettingsDialog(QDialog):
@@ -95,6 +142,25 @@ class SettingsDialog(QDialog):
         self.webdav_max_book.setCurrentIndex(mi if mi >= 0 else 0)
         self.sync_user_name = QLineEdit(cfg.get("sync_user_name", "default"))
         self.device_name = QLineEdit(cfg.get("device_name", ""))
+        # 额外的只读 WebDAV 书库（多数据源：只列书目 + 下载，不记进度、不同步；主书库见上面的 WebDAV 同步）
+        self.webdav_libraries = [dict(s) for s in (cfg.get("webdav_libraries") or []) if isinstance(s, dict)]
+        self.webdav_sources_list = QListWidget()
+        self.webdav_sources_list.setMinimumHeight(96)
+        self.webdav_sources_list.setToolTip("额外的只读 WebDAV 书库（数据源），如 alist 挂载的夸克网盘；"
+                                            "只列书目、可下载，不记录进度、不做跨设备同步。名称会成为书架里的目录前缀。")
+        self._reload_sources_list()
+        self._ws_add = QPushButton("添加…")
+        self._ws_edit = QPushButton("编辑…")
+        self._ws_remove = QPushButton("删除")
+        self._ws_add.clicked.connect(self._add_source)
+        self._ws_edit.clicked.connect(self._edit_source)
+        self._ws_remove.clicked.connect(self._remove_source)
+        ws_row = QWidget()
+        ws_h = QHBoxLayout(ws_row)
+        ws_h.setContentsMargins(0, 0, 0, 0)
+        for b in (self._ws_add, self._ws_edit, self._ws_remove):
+            ws_h.addWidget(b)
+        ws_h.addStretch(1)
         # 书架：默认视图 / 默认排序 / 启动时显示书架 / 重置
         self.shelf_view = QComboBox()
         self.shelf_view.addItem("网格", "grid")
@@ -202,6 +268,8 @@ class SettingsDialog(QDialog):
         add(net, "WebDAV 用户名", self.webdav_user)
         add(net, "WebDAV 密码", self.webdav_password)
         add(net, "", self.webdav_allow_insecure)
+        add(net, "额外书库（只读）", self.webdav_sources_list)
+        add(net, "", ws_row)
         add(net, "单个文件上限", self.webdav_max_book)
         add(net, "同步用户名", self.sync_user_name)
         add(net, "设备名", self.device_name)
@@ -228,6 +296,57 @@ class SettingsDialog(QDialog):
         scr = QGuiApplication.primaryScreen()
         max_h = int(scr.availableGeometry().height() * 0.85) if scr else want_h
         self.resize(want_w, min(want_h, max_h))
+
+    # ---- 额外书库源（多数据源）的列表编辑 ----
+    def _reload_sources_list(self):
+        self.webdav_sources_list.clear()
+        for s in self.webdav_libraries:
+            label = (s.get("name") or "?").strip()
+            url = (s.get("url") or "").strip()
+            tail = f"  —  {url}" if url else ""
+            if not s.get("enabled", True):
+                label += "（停用）"
+            item = QListWidgetItem(label + tail)
+            item.setData(Qt.ItemDataRole.UserRole, s)
+            self.webdav_sources_list.addItem(item)
+
+    def _add_source(self):
+        dlg = _DavSourceDialog(None, self)
+        if dlg.exec():
+            src = dlg.result_source()
+            if self._validate_source(src):
+                self.webdav_libraries.append(src)
+                self._reload_sources_list()
+
+    def _edit_source(self):
+        row = self.webdav_sources_list.currentRow()
+        if row < 0:
+            return
+        dlg = _DavSourceDialog(self.webdav_libraries[row], self)
+        if dlg.exec():
+            src = dlg.result_source()
+            if self._validate_source(src):
+                self.webdav_libraries[row] = src
+                self._reload_sources_list()
+
+    def _remove_source(self):
+        row = self.webdav_sources_list.currentRow()
+        if row >= 0:
+            del self.webdav_libraries[row]
+            self._reload_sources_list()
+
+    def _validate_source(self, src: dict) -> bool:
+        from .store import safe_segment, is_hidden_name
+        name = src.get("name", "")
+        if not name or safe_segment(name) is None or is_hidden_name(name):
+            QMessageBox.warning(self, "名称不合法",
+                                "名称不能为空，不能含 / \\ : 或控制字符，不能以 . 或 ~$ 开头，"
+                                "不能是 Windows 保留名（如 CON、NUL）。")
+            return False
+        if not src.get("url", "").strip():
+            QMessageBox.warning(self, "地址为空", "请填写 WebDAV 地址。")
+            return False
+        return True
 
     def _filter(self, text):
         """按空格分词，所有词都出现在该行的搜索文本里才显示；页签标题带上匹配行数，并跳到第一个有匹配的页。"""
