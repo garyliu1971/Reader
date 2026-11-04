@@ -523,6 +523,181 @@ def synthesize_tts_piper(text: str, voice_id: str, rate: str) -> bytes:
         voice.synthesize_wav(text, wav_file, syn_config=syn_config)
     return _normalize_wav_bytes(buf.getvalue())
 
+# ---- Windows 系统语音（WinRT SpeechSynthesizer，离线，无需联网/Key）----
+# 直接调用 Windows 自带 OneCore 语音（含「设置 → 时间和语言 → 语音」里可添加的自然音色，
+# 如晓晓/云希/云扬等）。依赖 winsdk（pip install winsdk）走 WinRT；未安装则该引擎不可用，
+# 不影响其它音色。
+# 注意：WinRT 对不存在的音色名会「静默回退到系统默认音色」而不是报错，因此：
+#   1. 优先用官方 SpeechSynthesizer.AllVoices 枚举（能拿到自然音色），注册表仅作兜底；
+#   2. 合成时用 VoiceInformation 直接赋值 synth.voice 选音（按对象/ID 命中），避免 SSML
+#      <voice name> 对不存在的音色静默回退到默认音、还误以为是音色本身的问题。
+_winrt_voices_cache = None
+_winrt_lang = {}
+_winrt_ids = {}
+
+
+def _lcid_to_lang(lcid):
+    """把 Windows LCID（十进制或十六进制）映射成 BCP-47 语言标签（够 SSML xml:lang 用）。
+
+    注册表里 LCID 存成十六进制字符串（无 0x 前缀），如 "804"=2052=zh-CN、"409"=1033=en-US。"""
+    try:
+        s = str(lcid).strip().lower()
+        if s.startswith("0x"):
+            v = int(s, 16)
+        elif s and all(c in "0123456789abcdef" for c in s):
+            v = int(s, 16)      # Windows LCID 十六进制字符串（无 0x 前缀）
+        else:
+            v = int(s)
+    except Exception:
+        return ""
+    return {0x804: "zh-CN", 0x404: "zh-TW", 0x409: "en-US", 0x809: "en-GB",
+            0x411: "ja-JP", 0x412: "ko-KR", 0x40c: "fr-FR", 0x407: "de-DE",
+            0xc0a: "es-ES", 0x410: "it-IT", 0x419: "ru-RU"}.get(v, "")
+
+
+def _winrt_all_voices():
+    """枚举 WinRT SpeechSynthesizer.AllVoices（官方接口），返回 [(显示名, 语言标签, id), ...]。
+
+    该接口能返回 OneCore 语音，也包含「设置 → 时间和语言 → 语音 → 添加语音」安装的自然音色
+    （显示名形如 "Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)"），是官方推荐的
+    枚举方式；注册表枚举（_winrt_registry_voices）只作兜底。"""
+    from winsdk.windows.media.speechsynthesis import SpeechSynthesizer
+    voices = SpeechSynthesizer.all_voices
+    out = []
+    if voices is None:
+        return out
+    for i in range(voices.size):
+        v = voices.get_at(i)
+        out.append((v.display_name, v.language, v.id))
+    return out
+
+
+def _winrt_registry_voices():
+    """枚举已安装的 Windows OneCore 语音，返回 [(显示名, 语言标签), ...]。"""
+    import winreg
+    out = []
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            key = winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens")
+        except OSError:
+            continue
+        try:
+            i = 0
+            while True:
+                try:
+                    token = winreg.EnumKey(key, i)
+                except OSError:
+                    break
+                i += 1
+                name, lang = token, ""
+                try:
+                    ak = winreg.OpenKey(key, token + r"\Attributes")
+                    try:
+                        v = winreg.QueryValueEx(ak, "Name")[0]
+                        if isinstance(v, str) and v.strip():
+                            name = v
+                    except OSError:
+                        pass
+                    try:
+                        lang = _lcid_to_lang(winreg.QueryValueEx(ak, "Language")[0])
+                    except OSError:
+                        pass
+                    winreg.CloseKey(ak)
+                except OSError:
+                    pass
+                out.append((name, lang))
+        finally:
+            winreg.CloseKey(key)
+    seen, dedup = set(), []
+    for n, l in out:
+        if n not in seen:
+            seen.add(n)
+            dedup.append((n, l))
+    return dedup
+
+
+def winrt_voices():
+    """返回可用的 Windows 系统语音 [(label, voice_key), ...]；无 winsdk 或无 OneCore 音色时返回 []。
+
+    voice_key 形如 "winrt:Microsoft Huihui"；自然音色形如
+    "winrt:Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)"。
+    优先用 AllVoices 枚举（含自然音色），失败再退回注册表；首次调用后缓存。"""
+    global _winrt_voices_cache
+    if _winrt_voices_cache is not None:
+        return _winrt_voices_cache
+    voices = []
+    try:
+        voices = _winrt_all_voices()
+    except Exception:
+        voices = []
+    if not voices:
+        # 兜底：读注册表（只有经典 OneCore 音色，看不到自然音色，但至少可用）
+        try:
+            voices = [(n, l, "") for n, l in _winrt_registry_voices()]
+        except Exception:
+            voices = []
+    result = []
+    for n, l, vid in voices:
+        _winrt_lang[n] = l
+        if vid:
+            _winrt_ids[n] = vid
+        label = ("%s（%s·系统离线）" % (n, l)) if l else ("%s（系统离线）" % n)
+        result.append((label, "winrt:" + n))
+    _winrt_voices_cache = result
+    return result
+
+
+def _winrt_find_voice(voice_name: str):
+    """按显示名/ID/描述名在 AllVoices 里找到对应 VoiceInformation；找不到返回 None。
+
+    用 VoiceInformation 直接赋值 synth.voice 是最可靠的选音方式（按对象/ID 命中，不是按名字猜），
+    自然音色（"Microsoft Xiaoxiao Online (Natural) - ..."）也能正确命中。"""
+    try:
+        from winsdk.windows.media.speechsynthesis import SpeechSynthesizer
+        voices = SpeechSynthesizer.all_voices
+        if voices is None:
+            return None
+        for i in range(voices.size):
+            v = voices.get_at(i)
+            if v.display_name == voice_name or v.id == voice_name or v.description == voice_name:
+                return v
+    except Exception:
+        return None
+    return None
+
+
+def synthesize_tts_winrt(text: str, voice_name: str, rate: str) -> bytes:
+    """Windows 系统语音离线合成，返回 wav 字节。voice_name 为系统音色显示名（含自然音色）。"""
+    from xml.sax.saxutils import escape
+    from winsdk.windows.media.speechsynthesis import SpeechSynthesizer
+    from winsdk.windows.storage.streams import DataReader
+    winrt_voices()   # 确保 _winrt_lang 已填充（内部缓存，二次调用开销≈0）
+    lang = _winrt_lang.get(voice_name, "zh-CN")
+    lang_attr = (" xml:lang='%s'" % lang) if lang else ""
+    vi = _winrt_find_voice(voice_name)   # 自然音色也能按显示名命中
+    if vi is not None:
+        # 选音交给 synth.voice（按对象/ID 命中），SSML 只负责语速，避免 <voice name> 静默回退
+        ssml = ("<speak version='1.0'%s xmlns='http://www.w3.org/2001/10/synthesis'>"
+                "<prosody rate='%s'>%s</prosody></speak>"
+                % (lang_attr, rate, escape(text)))
+    else:
+        # 找不到对应 VoiceInformation（如旧配置残留）→ 退回 SSML <voice name>；若仍不存在会静默用默认音
+        ssml = ("<speak version='1.0'%s xmlns='http://www.w3.org/2001/10/synthesis'>"
+                "<voice name='%s'><prosody rate='%s'>%s</prosody></voice></speak>"
+                % (lang_attr, escape(voice_name), rate, escape(text)))
+
+    async def _go():
+        synth = SpeechSynthesizer()
+        if vi is not None:
+            synth.voice = vi
+        stream = await synth.synthesize_ssml_to_stream_async(ssml)
+        reader = DataReader(stream.get_input_stream_at(0))
+        await reader.load_async(stream.size)
+        data = bytearray(stream.size)
+        reader.read_bytes(data)
+        return bytes(data)
+    return asyncio.run(_go())
+
 def split_sentences(text: str, base: int = 0):
     """把文本切成句子：返回 [(起始偏移, 结束偏移, 句子文本)]，偏移为全局字符偏移。
 
@@ -917,9 +1092,12 @@ def _normalize_tts_text(text: str) -> str:
 def synthesize_tts(text: str, voice: str, rate: str) -> bytes:
     """把一段文本合成音频字节。voice 以 "kokoro:" 走本地 Kokoro-82M 离线合成（wav，中英混读，推荐），
     以 "sherpa:" 走本地 Melo 离线合成（wav，中英混读），以 "piper:" 开头走本地 Piper 离线合成
-    （wav，仅英文），以 "azure:" 走 Azure Speech 云端合成（mp3）。"""
+    （wav，仅英文），以 "winrt:" 走 Windows 系统语音离线合成（wav），以 "azure:" 走 Azure Speech
+    云端合成（mp3）。"""
     if voice.startswith("azure:"):
         return synthesize_tts_azure(text, voice[len("azure:"):], rate)
+    if voice.startswith("winrt:"):
+        return synthesize_tts_winrt(text, voice[len("winrt:"):], rate)
     text = _normalize_tts_text(text)   # 离线引擎：先归一化标点，避免 OOV 字符被静默丢弃
     if not text.strip():
         # 归一化后只剩空白（如原句全是引号/标点，被替换成空字符串后只剩换行符），离线引擎

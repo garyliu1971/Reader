@@ -20,6 +20,8 @@ tmp_ret = collect_all('PIL')      # 3D 翻页透视扭曲
 binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('numpy')    # 快照转数组
 binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('winsdk')   # Windows 系统语音（WinRT SpeechSynthesizer，离线）
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # ---- 未用到的 Qt 模块（排除后可省几百 MB）----
 # 应用只用 QtWidgets + QtGui + QtCore + QtMultimedia + QtNetwork。
