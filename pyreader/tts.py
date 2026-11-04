@@ -272,43 +272,17 @@ def _sherpa_detect_bad(g, text):
 def synthesize_tts_sherpa(text: str, rate: str) -> bytes:
     """离线合成（Sherpa-ONNX Melo，中英混读），返回 wav 字节。
 
-    对两种已知缺陷做重试保护（详见前面长注释），但两者预算分开：
-      - 整句伪静音（多为单字/短句，单次 1~3s）→ 最多 8 次，前 3 次只扰动 speed；
-      - 句首吞字（多为长句，单次 9~12s）→ 最多 2 次，第 2 次直接加前缀。
-    长句多试几次的代价是十几秒静音，比“偶尔吞一个字”更伤体验，所以句首类快速止血。"""
+    【2026-11 修改】只合成一次，不做任何重试。
+    原因：Melo 在本机合成速度约 0.6× 实时（rtf≈1.6），本来就追不上播放；旧逻辑对
+    「伪静音/句首吞字」做最多 8 次重合成，每次都卡住唯一的合成线程，把整条流水线
+    冻住十几秒，听感就是「两个句子中间长时间停顿（合成）」。按要求：连续优先，
+    丢字/吞音可直接忽略，所以这里直接接受单次结果，不再扰动 speed/加前缀/重试。"""
     import numpy as np
-    import random
-    base_speed = _rate_to_speed(rate)
-    speed = base_speed
-    g = None
-    is_bad, reason, kind = True, "", "silent"
-    used_prefix = False
-    attempt = 0
-    while True:
-        budget = SHERPA_SILENT_RETRY if kind == "silent" else SHERPA_HEAD_RETRY
-        prefix_at = SHERPA_SPEED_ONLY_RETRY if kind == "silent" else SHERPA_HEAD_PREFIX_AT
-        cur_text = SHERPA_FALLBACK_PREFIX + text if attempt >= prefix_at else text
-        used_prefix = attempt >= prefix_at
-        with _sherpa_lock:
-            tts = _load_sherpa_tts()
-            g = tts.generate(cur_text, sid=0, speed=speed)
-        if not len(g.samples):
-            raise RuntimeError("Melo 未返回音频")
-        is_bad, reason, kind = _sherpa_detect_bad(g, cur_text)
-        if not is_bad:
-            break
-        _log_tts(f"[Melo重试] {reason}（第{attempt + 1}次{'，已加前缀' if used_prefix else ''}）：{text[:30]!r}")
-        attempt += 1
-        if attempt >= budget:      # 该类缺陷的预算用尽 → 不再硬试
-            break
-        speed = base_speed * (1.0 + random.uniform(-SHERPA_SILENT_SPEED_JITTER, SHERPA_SILENT_SPEED_JITTER))
-    if is_bad:
-        _log_tts(f"[Melo重试失败] {attempt} 次仍异常（{reason}），改返回短暂静音：{text[:30]!r}")
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as w:
-            w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100)
-            w.writeframes(b"\x00\x00" * int(44100 * 0.15))   # 150ms 短暂静音，代替伪噪声/吸字
-        return buf.getvalue()
+    with _sherpa_lock:
+        tts = _load_sherpa_tts()
+        g = tts.generate(text, sid=0, speed=_rate_to_speed(rate))
+    if not len(g.samples):
+        raise RuntimeError("Melo 未返回音频")
     samples = _normalize_loudness(g.samples, sample_rate=g.sample_rate)
     pcm = (np.clip(samples, -1, 1) * 32767).astype(np.int16)
     buf = io.BytesIO()
