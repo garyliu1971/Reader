@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (QDialog, QComboBox, QLineEdit, QCheckBox, QDouble
                                QVBoxLayout, QScrollArea, QWidget, QFrame, QTabWidget)
 from PySide6.QtGui import QGuiApplication
 from .config import AI_PRESETS, THEMES, DEFAULT_THEME, FLIP_EFFECTS, DEFAULT_FLIP_EFFECT
-from .tts import TTS_VOICES, TTS_DEFAULT_VOICE, TTS_RATES, winrt_voices
+from .tts import TTS_VOICES, TTS_DEFAULT_VOICE, TTS_RATES, winrt_voices, sapi_voices
 from .shelfview import SORT_LABELS as SHELF_SORT_LABELS
 
 # ============ 设置对话框 ============
@@ -60,7 +60,7 @@ class SettingsDialog(QDialog):
         self.gutter.setValue(cfg.get("gutter", 32))
         # 语音朗读
         self.tts_voice = QComboBox()
-        for label, vid in TTS_VOICES + winrt_voices():
+        for label, vid in TTS_VOICES + winrt_voices() + sapi_voices():
             self.tts_voice.addItem(label, vid)
         vi = self.tts_voice.findData(cfg.get("tts_voice", TTS_DEFAULT_VOICE))
         self.tts_voice.setCurrentIndex(vi if vi >= 0 else 0)

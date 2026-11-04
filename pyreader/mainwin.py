@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
         set_net_proxy(self.cfg.get("proxy") or os.environ.get("PYREADER_PROXY", ""))
         set_azure_config(self.cfg["azure_tts_key"], self.cfg["azure_tts_region"],
                          self.cfg["azure_tts_key2"], self.cfg["azure_tts_region2"])
-        if self.cfg.get("tts_voice") not in {v for _, v in TTS_VOICES} and not str(self.cfg.get("tts_voice", "")).startswith("winrt:"):   # 已下线的 edge-tts 音色 → 默认音色
+        if self.cfg.get("tts_voice") not in {v for _, v in TTS_VOICES} and not str(self.cfg.get("tts_voice", "")).startswith(("winrt:", "sapi:")):   # 已下线的 edge-tts 音色 → 默认音色
             self.cfg["tts_voice"] = TTS_DEFAULT_VOICE
         self.bookmarks = load_json(BOOKMARKS_PATH, {})
         self.book_path = book_path

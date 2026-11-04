@@ -1063,15 +1063,78 @@ def _normalize_tts_text(text: str) -> str:
         text = text.replace(k, v)
     return text
 
+# ---- SAPI5 语音（含 NaturalVoiceSAPIAdapter 桥接的自然语音）----
+# Windows 自然语音（晓晓/云希等）是 AppX 包，只对讲述人等系统 App 可见，普通桌面程序走
+# WinRT AllVoices / SAPI 令牌都枚举不到。装 NaturalVoiceSAPIAdapter
+# （github.com/gexgd0419/NaturalVoiceSAPIAdapter，Release zip → 解压 → 管理员跑 Installer.exe）
+# 后，自然语音会以 SAPI5 音色出现，这里走 SAPI5（comtypes + SAPI.SpVoice）调用。
+_sapi_voices_cache = None
+
+
+def sapi_voices():
+    """枚举 SAPI5 音色，返回 [(显示名, "sapi:"+显示名), ...]。
+    未装适配器时只有系统经典 SAPI 音色；装好后自然语音会一并出现。"""
+    global _sapi_voices_cache
+    if _sapi_voices_cache is not None:
+        return _sapi_voices_cache
+    out = []
+    try:
+        import comtypes.client
+        v = comtypes.client.CreateObject("SAPI.SpVoice")
+        toks = v.GetVoices()
+        for i in range(toks.Count):
+            t = toks.Item(i)
+            out.append((t.GetDescription(), "sapi:" + t.GetDescription()))
+    except Exception as e:
+        _log_tts(f"[SAPI5] 枚举音色失败：{e}")
+    _sapi_voices_cache = out
+    return out
+
+
+def synthesize_tts_sapi(text: str, voice_name: str, rate: str) -> bytes:
+    """SAPI5 合成（含 NaturalVoiceSAPIAdapter 的自然语音），输出 wav 字节。"""
+    import tempfile
+    import comtypes.client
+    v = comtypes.client.CreateObject("SAPI.SpVoice")
+    toks = v.GetVoices()
+    for i in range(toks.Count):
+        t = toks.Item(i)
+        if t.GetDescription() == voice_name:
+            v.Voice = t
+            break
+    try:
+        pct = int(str(rate).strip().replace("%", ""))
+    except Exception:
+        pct = 0
+    v.Rate = max(-10, min(10, int(round(pct / 10.0))))   # SAPI 语速 -10..10，0 为默认
+    tmp = os.path.join(tempfile.gettempdir(),
+                       f"pyreader_sapi_{os.getpid()}_{threading.get_ident()}.wav")
+    try:
+        stream = comtypes.client.CreateObject("SAPI.SpFileStream")
+        stream.Open(tmp, 3)   # SSFMCreateForWrite
+        v.AudioOutputStream = stream
+        v.Speak(text)         # 阻塞直到合成完成
+        stream.Close()
+        with open(tmp, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+
+
 def synthesize_tts(text: str, voice: str, rate: str) -> bytes:
     """把一段文本合成音频字节。voice 以 "kokoro:" 走本地 Kokoro-82M 离线合成（wav，中英混读，推荐），
     以 "sherpa:" 走本地 Melo 离线合成（wav，中英混读），以 "piper:" 开头走本地 Piper 离线合成
-    （wav，仅英文），以 "winrt:" 走 Windows 系统语音离线合成（wav），以 "azure:" 走 Azure Speech
-    云端合成（mp3）。"""
+    （wav，仅英文），以 "winrt:" 走 Windows 系统语音离线合成（wav），以 "sapi:" 走 SAPI5
+    （含 NaturalVoiceSAPIAdapter 桥接的自然语音），以 "azure:" 走 Azure Speech 云端合成（mp3）。"""
     if voice.startswith("azure:"):
         return synthesize_tts_azure(text, voice[len("azure:"):], rate)
     if voice.startswith("winrt:"):
         return synthesize_tts_winrt(text, voice[len("winrt:"):], rate)
+    if voice.startswith("sapi:"):
+        return synthesize_tts_sapi(text, voice[len("sapi:"):], rate)
     text = _normalize_tts_text(text)   # 离线引擎：先归一化标点，避免 OOV 字符被静默丢弃
     if not text.strip():
         # 归一化后只剩空白（如原句全是引号/标点，被替换成空字符串后只剩换行符），离线引擎
