@@ -63,7 +63,7 @@ Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\nvsapi\x64\NaturalVoiceS
 
 [UninstallRun]
 ; 卸载时反注册自然语音适配器（仅当 DLL 存在，避免没装过也弹 UAC）
-Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\nvsapi\x64\NaturalVoiceSAPIAdapter.dll"""; Flags: runhidden waituntilterminated shellexec; Verb: runas; Check: NvsapiInstalled
+Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\nvsapi\x64\NaturalVoiceSAPIAdapter.dll"""; Flags: runhidden waituntilterminated shellexec; Verb: runas; Check: NvsapiInstalled; RunOnceId: "unreg_nvsapi"
 
 [Registry]
 ; ---- 文件关联（可选任务）----
