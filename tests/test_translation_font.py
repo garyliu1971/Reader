@@ -11,19 +11,19 @@ from pyreader.config import (DEFAULT_CONFIG, TRANS_SCALE_DEFAULT, TRANS_SCALE_MA
 
 
 def test_default_scale_not_smaller_than_body():
-    assert DEFAULT_CONFIG["translation_font_scale"] == TRANS_SCALE_DEFAULT == 1.1
+    assert DEFAULT_CONFIG["translation_font_scale"] == TRANS_SCALE_DEFAULT == 1.4
     assert translation_point_size(DEFAULT_CONFIG["font_size"], TRANS_SCALE_DEFAULT) > DEFAULT_CONFIG["font_size"]
 
 
 def test_old_config_without_key_uses_default():
     cfg = {**DEFAULT_CONFIG, **{"font_size": 18}}           # 旧 config.json 无该键，合并后取默认
-    assert clamp_trans_scale(cfg.get("translation_font_scale")) == 1.1
-    assert clamp_trans_scale({}.get("translation_font_scale")) == 1.1
+    assert clamp_trans_scale(cfg.get("translation_font_scale")) == TRANS_SCALE_DEFAULT
+    assert clamp_trans_scale({}.get("translation_font_scale")) == TRANS_SCALE_DEFAULT
 
 
 @pytest.mark.parametrize("raw,exp", [(0.1, TRANS_SCALE_MIN), (-3, TRANS_SCALE_MIN), (9, TRANS_SCALE_MAX),
-                                     (1.5, 1.5), ("1.3", 1.3), ("abc", 1.1), (None, 1.1),
-                                     (float("nan"), 1.1)])
+                                     (1.5, 1.5), ("1.3", 1.3), ("abc", 1.4), (None, 1.4),
+                                     (float("nan"), 1.4)])
 def test_clamp(raw, exp):
     assert clamp_trans_scale(raw) == exp
 
@@ -61,9 +61,9 @@ def test_settings_dialog_has_scale_control():
     from pyreader.settings import SettingsDialog
     app = QApplication.instance() or QApplication([])
     d = SettingsDialog(dict(DEFAULT_CONFIG))
-    assert d.trans_scale.value() == pytest.approx(1.1)
+    assert d.trans_scale.value() == pytest.approx(1.4)
     assert d.trans_scale.minimum() == TRANS_SCALE_MIN and d.trans_scale.maximum() == TRANS_SCALE_MAX
     cfg = {k: v for k, v in DEFAULT_CONFIG.items() if k != "translation_font_scale"}
-    assert SettingsDialog(cfg).trans_scale.value() == pytest.approx(1.1)
+    assert SettingsDialog(cfg).trans_scale.value() == pytest.approx(1.4)
     cfg["translation_font_scale"] = 5
     assert SettingsDialog(cfg).trans_scale.value() == pytest.approx(TRANS_SCALE_MAX)
