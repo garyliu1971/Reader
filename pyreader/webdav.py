@@ -120,6 +120,34 @@ def _normalize_url(url: str) -> str:
     return urllib.parse.urlunsplit((u.scheme, u.netloc, path, u.query, u.fragment))
 
 
+def stream_to_file(r, fileobj, what: str, max_bytes: Optional[int] = None, chunk: int = 65536,
+                   should_cancel=None, progress: Optional[Callable[[int, int], None]] = None) -> int:
+    """把已打开的响应 r 按块写进 fileobj，返回字节数（WebDAV 与 OPDS 下载共用）。语义见 WebDavClient.get_to_file。"""
+    cl = (r.headers.get("Content-Length") or "").strip() if r.headers else ""
+    expect = int(cl) if cl.isdigit() else None
+    if max_bytes is not None and expect is not None and expect > max_bytes:
+        raise WebDavError(f"{what}: response too large ({expect} > {max_bytes})")
+    total = 0
+    while True:
+        if should_cancel is not None and should_cancel():
+            raise WebDavError(f"{what}: cancelled")
+        buf = r.read(chunk)
+        if not buf:
+            break
+        total += len(buf)
+        if max_bytes is not None and total > max_bytes:
+            raise WebDavError(f"{what}: response too large (> {max_bytes})")
+        fileobj.write(buf)
+        if progress is not None:
+            try:
+                progress(total, expect or 0)
+            except Exception:
+                pass
+    if expect is not None and total != expect:
+        raise WebDavError(f"{what}: truncated response ({total} of {expect} bytes)")
+    return total
+
+
 class WebDavClient:
     def __init__(self, base_url: str, user: str = "", password: str = "", timeout: float = 20,
                  allow_insecure_auth: bool = False):
@@ -276,29 +304,7 @@ class WebDavClient:
         req = urllib.request.Request(self._url(path), method="GET", headers=self._headers())
         try:
             with net_urlopen(req, timeout=self.timeout) as r:
-                cl = (r.headers.get("Content-Length") or "").strip() if r.headers else ""
-                expect = int(cl) if cl.isdigit() else None
-                if max_bytes is not None and expect is not None and expect > max_bytes:
-                    raise WebDavError(f"{what}: response too large ({expect} > {max_bytes})")
-                total = 0
-                while True:
-                    if should_cancel is not None and should_cancel():
-                        raise WebDavError(f"{what}: cancelled")
-                    buf = r.read(chunk)
-                    if not buf:
-                        break
-                    total += len(buf)
-                    if max_bytes is not None and total > max_bytes:
-                        raise WebDavError(f"{what}: response too large (> {max_bytes})")
-                    fileobj.write(buf)
-                    if progress is not None:
-                        try:
-                            progress(total, expect or 0)
-                        except Exception:
-                            pass
-                if expect is not None and total != expect:
-                    raise WebDavError(f"{what}: truncated response ({total} of {expect} bytes)")
-                return total
+                return stream_to_file(r, fileobj, what, max_bytes, chunk, should_cancel, progress)
         except urllib.error.HTTPError as e:
             raise WebDavError(f"{what} -> HTTP {e.code}", status=e.code) from e
         except WebDavError:

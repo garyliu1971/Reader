@@ -316,6 +316,34 @@ def decode_text(raw: bytes) -> str:
             best_text, best_count = t, c
     return _norm_newlines(best_text)
 
+_BLANK_SPLIT_RE = re.compile(r"(\n[ \t]*\n+)")
+_WRAP_MIN = 40      # 硬折行文本（Gutenberg 约 70 列）每个中间行都不会短于此；诗歌 / 短行列表不满足
+
+def unwrap_latin_text(text: str) -> str:
+    """西文 txt 的硬折行还原：空行分隔的段落内，单个换行合并为空格。
+    判断依据：中文 txt 的约定是「一行一段」，单个 \n 就是段落分隔，必须保留，所以
+    1) CJK 字符占比 >= 5% 的文本整体不处理；2) 没有空行分隔的文本（本身就是一行一段）不处理；
+    3) 只有「除末行外每行都 >= 40 字符且后续行无缩进」的段落才合并（诗歌 / 缩进引文 / 短行列表原样保留）。"""
+    if not re.search(r"\n[ \t]*\n", text):
+        return text
+    sample = text[:200000]
+    letters = sum(1 for c in sample if c.isalpha())
+    if letters and sum(1 for c in sample if _is_cjk(c) and c.isalpha()) / letters >= 0.05:
+        return text
+    parts = _BLANK_SPLIT_RE.split(text)
+    for i in range(0, len(parts), 2):
+        blk = parts[i]
+        if "\n" not in blk:
+            continue
+        lines = blk.split("\n")
+        if all(len(l) >= _WRAP_MIN for l in lines[:-1]) and not any(l[:1] in (" ", "\t") for l in lines[1:]):
+            parts[i] = " ".join(l.strip() if k else l.rstrip() for k, l in enumerate(lines))
+    return "".join(parts)
+
+def decode_plain_text(raw: bytes) -> str:
+    """纯文本书（txt 等）：解码 + 西文硬折行还原。"""
+    return unwrap_latin_text(decode_text(raw))
+
 # ============ epub / HTML 解析（标准库，零依赖） ============
 def _strip_ns(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
@@ -333,6 +361,20 @@ def _clean_title(frag: str) -> str:
     s = re.sub(r"(?is)<br\s*/?>|</?(?:p|div|h[1-6]|li|tr|td|th|blockquote|section|article)\b[^>]*>", " ", frag)
     s = re.sub(r"(?s)<[^>]+>", "", s)
     return re.sub(r"\s+", " ", html.unescape(s)).strip()
+
+_PRE_RE = re.compile(r"(?is)(<pre\b.*?</pre\s*>)")
+_SRC_NL_RE = re.compile(r"[ \t\r]*\n\s*")
+
+def _is_cjk(ch: str) -> bool:
+    return ch >= "⺀"        # CJK / 假名 / 谚文 / 全角标点（含 、。）；U+201C/D 等西文弯引号不算
+
+def _collapse_source_newlines(s: str) -> str:
+    """HTML 里源码折行只是空白：<p> 内的硬换行（Gutenberg 约每 70 字符折一行）合并成空格；
+    <br> / 块级结束标签产生的换行在后面单独处理，不受影响；<pre> 原样保留。两侧都是 CJK 时直接相连不插空格。"""
+    def sub(seg):
+        return _SRC_NL_RE.sub(lambda m: "" if (m.start() > 0 and m.end() < len(seg)
+                              and _is_cjk(seg[m.start() - 1]) and _is_cjk(seg[m.end()])) else " ", seg)
+    return "".join(part if i % 2 else sub(part) for i, part in enumerate(_PRE_RE.split(s)))
 
 class _Doc:
     """一份 HTML 转换结果：text 全文；anchors {id: 偏移}；heads [(偏移, 标题)] (h1-h3)；
@@ -356,6 +398,7 @@ def _convert_html(raw: bytes) -> _Doc:
         d.t_title = _clean_title(m.group(1))
     d.title = d.h_title or d.t_title
     s = re.sub(r"(?is)<head\b.*?</head>", "", s)
+    s = _collapse_source_newlines(s)
     heads_txt = []
 
     def _head(m):
@@ -384,6 +427,7 @@ def _convert_html(raw: bytes) -> _Doc:
     # 标记后移到紧随的空白之后：让空白折叠不会被标记打断，锚点也总落在正文首字上
     s = _MK_RUN_RE.sub(lambda m: m.group(2) + m.group(1), s)
     s = re.sub(r"[ \t\r]+", " ", s)
+    s = re.sub(r" ?\n ?", "\n", s)          # 源码折行折叠成空格后，段首 / 段尾会残留空格；去掉以免段首被误判为「已缩进」
     s = re.sub(r"\n\s*\n+", "\n\n", s)
     s = s.strip()
     # 取出标记并记录其在「纯文本」里的偏移

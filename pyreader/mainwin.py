@@ -346,6 +346,8 @@ class MainWindow(QMainWindow):
         self.remote_menu.aboutToShow.connect(self._rebuild_remote_menu)
         self.remote_act = tb.addAction("☁️ 远程书库")
         self.remote_act.setMenu(self.remote_menu)
+        # 在线书源（OPDS）：独立对话框，见 booksourcedlg.py
+        tb.addAction("🌐 在线书源", self.open_book_sources).setToolTip("浏览 / 搜索在线书源（如 Project Gutenberg）并下载")
         # 书架（可勾选，Ctrl+B；阅读页按 Esc 也回书架）
         self.shelf_act = tb.addAction("📖 书架")
         self.shelf_act.setCheckable(True)
@@ -782,6 +784,12 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction("⬆️ 上传当前书到云端书库…", self._upload_current_book)
 
+    def open_book_sources(self):
+        from .booksourcedlg import BookSourceDialog      # 延迟导入：不用在线书源时不加载 lxml
+        dlg = BookSourceDialog(self.cfg, self)
+        dlg.bookReady.connect(self.load_book)
+        dlg.exec()
+
     def _open_remote_book(self, rel, size):
         self.statusBar().showMessage(f"正在下载 {rel} …")
         self.sync.download(self.cfg, rel, size)
@@ -1204,6 +1212,7 @@ class MainWindow(QMainWindow):
                 "webdav_allow_insecure": dlg.webdav_allow_insecure.isChecked(),
                 "webdav_max_book_mb": dlg.webdav_max_book.currentData(),
                 "webdav_libraries": [dict(s) for s in dlg.webdav_libraries],
+                "book_sources": [dict(s) for s in dlg.book_sources],
                 "sync_user_name": dlg.sync_user_name.text().strip() or "default",
                 "device_name": dlg.device_name.text().strip() or syncmod.default_device_name(),
                 "shelf_default_view": dlg.shelf_view.currentData(),
