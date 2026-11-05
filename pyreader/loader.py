@@ -1,6 +1,6 @@
 import os
 from PySide6.QtCore import QObject, Signal
-from .textio import load_epub, load_html_file, load_markdown, decode_text, scan_chapters
+from .textio import load_epub, load_html_file, load_markdown, decode_plain_text, scan_chapters
 from .pdf import load_pdf, load_kindle
 from .docx import load_docx
 from .pptx import load_pptx
@@ -71,7 +71,7 @@ class BookLoader(QObject):
                 with open(self.path, "rb") as f:
                     raw = f.read()
                 self.progress.emit(40, "解码…")
-                text = decode_text(raw)
+                text = decode_plain_text(raw)
                 self.progress.emit(65, "扫描章节…")
                 chapters = scan_chapters(text)
                 title = ""
@@ -108,6 +108,6 @@ class BookLoader(QObject):
             else:
                 with open(self.path, "rb") as f:
                     raw = f.read()
-                return decode_text(raw)
+                return decode_plain_text(raw)
         except Exception:
             return None

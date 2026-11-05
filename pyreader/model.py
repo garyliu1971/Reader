@@ -21,6 +21,16 @@ class Page:
     def __init__(self, index, start, end, lines):
         self.index, self.start, self.end, self.lines = index, start, end, lines
 
+def _can_break(text: str, i: int) -> bool:
+    """能否在 text[i-1] 与 text[i] 之间断行：空格之后、连字符 / 破折号之后、任一侧是 CJK 时可断；
+    拉丁词内部（含撇号 Taylor’s、数字）不可断。"""
+    a, b = text[i - 1], text[i]
+    if a in " \t" or a == "—":
+        return True
+    if a == "-" and i >= 2 and text[i - 2].isalnum() and b.isalnum():
+        return True
+    return a >= "⺀" or b >= "⺀"
+
 def wrap_line(fm: QFontMetricsF, text: str, max_w: float) -> Tuple[str, str]:
     if not text:
         return "", ""
@@ -34,6 +44,14 @@ def wrap_line(fm: QFontMetricsF, text: str, max_w: float) -> Tuple[str, str]:
         else:
             hi = mid - 1
     lo = max(lo, 1)
+    if text[lo] == " ":                 # 恰好断在词尾：把空格留在行尾（不可见），下一行不以空格开头
+        lo += 1
+    elif not _can_break(text, lo):      # 会把拉丁词劈开：回退到最近的可断点；整行都是同一个词才强制断词
+        k = lo
+        while k > 1 and not _can_break(text, k):
+            k -= 1
+        if k > 1:
+            lo = k
     return text[:lo], text[lo:]
 
 def paginate(text: str, font: QFont, page_size: QSizeF, base_offset: int = 0,
