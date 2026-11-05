@@ -11,6 +11,8 @@ import shutil
 import socket
 import threading
 import time
+import urllib.error
+import urllib.parse
 from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
@@ -191,6 +193,15 @@ def download_book(client: WebDavClient, rel: str, size: int, dest_root: Optional
     dest = os.path.abspath(os.path.join(root, *dest_rel.split("/")))
     if not dest.startswith(root + os.sep):
         raise WebDavError("illegal path")
+    return _download_atomic(
+        dest, size, lambda f, kw: client.get_to_file("library/" + rel, f, max_bytes=max_bytes,
+                                                      should_cancel=should_cancel, **kw), rel, progress)
+
+
+def _download_atomic(dest: str, size: int, fetch, label: str, progress=None) -> str:
+    """下载的公共部分（WebDAV 与 OPDS 共用）：同大小本地文件直接复用；先查磁盘空间；流式写 <dest>.part；
+    size > 0 时字节数必须一致；成功才 os.replace，失败 / 取消清掉 .part。fetch(fileobj, kwargs) 负责真正的流式读取，
+    kwargs 是要透传的 progress 参数（可能为空）。"""
     size = int(size or 0)
     if size > 0 and os.path.isfile(dest) and os.path.getsize(dest) == size:
         return dest
@@ -206,9 +217,9 @@ def download_book(client: WebDavClient, rel: str, size: int, dest_root: Optional
     kw = {"progress": (lambda n, e: progress(n, size or e))} if progress is not None else {}
     try:
         with open(tmp, "wb") as f:
-            n = client.get_to_file("library/" + rel, f, max_bytes=max_bytes, should_cancel=should_cancel, **kw)
+            n = fetch(f, kw)
         if size > 0 and n != size:
-            raise WebDavError(f"size mismatch for {rel}: got {n} bytes, expected {size}")
+            raise WebDavError(f"size mismatch for {label}: got {n} bytes, expected {size}")
         os.replace(tmp, dest)
     finally:
         try:
@@ -216,6 +227,43 @@ def download_book(client: WebDavClient, rel: str, size: int, dest_root: Optional
         except OSError:
             pass
     return dest
+
+
+def download_url(url: str, dest: str, size: int = 0, max_bytes: int = MAX_BOOK_BYTES, headers=None,
+                 should_cancel=None, progress=None, timeout: float = 30, allow_insecure: bool = False) -> str:
+    """把任意 http(s) URL 流式下载到本地文件 dest（绝对路径），返回 dest。阻塞调用，只能在后台线程用。
+    .part + 大小校验 + 磁盘空间检查 + os.replace 与 download_book 完全一致（共用 _download_atomic）。
+
+    - 只接受 https；allow_insecure=True 才放行 http（沿用书库源的同名开关）。重定向后落到 http 同样拒绝。
+    - headers 里的凭据由 config.net_urlopen 的重定向处理器在跨主机 / 跨协议重定向时剥掉，不会带到别的主机。
+    - size > 0 时字节数必须等于它（OPDS 的 length 属性）；size <= 0 只校验 Content-Length。"""
+    import urllib.request
+    from .config import net_urlopen
+    from .webdav import stream_to_file
+
+    def _scheme_ok(u: str) -> bool:
+        sch = urllib.parse.urlsplit(u).scheme.lower()
+        return sch == "https" or (sch == "http" and allow_insecure)
+
+    if not _scheme_ok(url):
+        raise WebDavError("refusing non-https download URL")
+
+    def fetch(f, kw):
+        req = urllib.request.Request(url, method="GET", headers=dict(headers or {}))
+        try:
+            with net_urlopen(req, timeout=timeout) as r:
+                if not _scheme_ok(r.geturl()):
+                    raise WebDavError("refusing redirect to non-https URL")
+                return stream_to_file(r, f, f"GET {url}", max_bytes, should_cancel=should_cancel, **kw)
+        except urllib.error.HTTPError as e:
+            raise WebDavError(f"GET {url} -> HTTP {e.code}", status=e.code) from e
+        except WebDavError:
+            raise
+        except Exception as e:
+            raise WebDavError(f"GET {url} failed: {e}") from e
+
+    dest = os.path.abspath(dest)
+    return _download_atomic(dest, size, fetch, os.path.basename(dest), progress)
 
 
 class SyncWorker(QObject):
