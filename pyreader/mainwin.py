@@ -232,7 +232,6 @@ class MainWindow(QMainWindow):
         self.sync.pulled.connect(self._on_remote_progress)
         self.sync.status.connect(lambda m: self.statusBar().showMessage(m, 5000))
         self.sync.downloaded.connect(self.load_book)
-        self.sync.remoteList.connect(self._fill_remote_menu)
         self._loaded_path = None       # 已完成加载的书（远端进度到达时用来判断能否立刻应用）
         self._pending_remote = None    # 在书加载完成前到达的远端进度
         self._seed_push = None         # 首次打开云端缓存副本时从本地副本种入了进度：等远端确认没有记录后推送一次
@@ -341,11 +340,9 @@ class MainWindow(QMainWindow):
         self.library_menu.aboutToShow.connect(self._rebuild_library_menu)
         self.library_act = tb.addAction("📚 书库")
         self.library_act.setMenu(self.library_menu)
-        # 远程书库（WebDAV <base>/library）：展开时后台列目录
-        self.remote_menu = QMenu("远程书库", self)
-        self.remote_menu.aboutToShow.connect(self._rebuild_remote_menu)
-        self.remote_act = tb.addAction("☁️ 远程书库")
-        self.remote_act.setMenu(self.remote_menu)
+        # 上传到远程书库（WebDAV <base>/library）：只保留上传；浏览 / 下载云端书走书架（Ctrl+B）
+        self.remote_act = tb.addAction("☁️ 上传到远程书库", self._upload_current_book)
+        self.remote_act.setToolTip("把当前打开的书上传到云端书库（WebDAV）；浏览 / 下载云端书请用书架 (Ctrl+B)")
         # 在线书源（OPDS）：独立对话框，见 booksourcedlg.py
         tb.addAction("🌐 在线书源", self.open_book_sources).setToolTip("浏览 / 搜索在线书源（如 Project Gutenberg）并下载")
         # 书架（可勾选，Ctrl+B；阅读页按 Esc 也回书架）
@@ -765,34 +762,11 @@ class MainWindow(QMainWindow):
     def _sync_on(self):
         return syncmod.client_from_cfg(self.cfg) is not None
 
-    def _rebuild_remote_menu(self):
-        m = self.remote_menu
-        m.clear()
-        if not self._sync_on():
-            m.addAction("（未启用 WebDAV：设置中填写地址并勾选启用）").setEnabled(False)
-            return
-        m.addAction("正在读取远程书库…").setEnabled(False)
-        self.sync.list_library(self.cfg, self.BOOK_EXTS)
-
-    def _fill_remote_menu(self, files):
-        m = self.remote_menu
-        m.clear()
-        for rel, size in files[:self.LIBRARY_MAX_FILES]:
-            m.addAction(rel, lambda rel=rel, size=size: self._open_remote_book(rel, size))
-        if not files:
-            m.addAction("（远程书库为空）").setEnabled(False)
-        m.addSeparator()
-        m.addAction("⬆️ 上传当前书到云端书库…", self._upload_current_book)
-
     def open_book_sources(self):
         from .booksourcedlg import BookSourceDialog      # 延迟导入：不用在线书源时不加载 lxml
         dlg = BookSourceDialog(self.cfg, self)
         dlg.bookReady.connect(self.load_book)
         dlg.exec()
-
-    def _open_remote_book(self, rel, size):
-        self.statusBar().showMessage(f"正在下载 {rel} …")
-        self.sync.download(self.cfg, rel, size)
 
     def _upload_current_book(self):
         if not self._sync_on():
