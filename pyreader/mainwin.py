@@ -1486,10 +1486,10 @@ class MainWindow(QMainWindow):
         _, _, text = self.tts_sentences[seq]
         clean = re.sub(r"\s+", " ", text).strip()
         tr = self.tr_cache.get(seq)
-        if tr is None:
-            self.bilingual_out.setPlainText(f"原文：{clean}\n\n译文：（翻译中…）")
-        else:
-            self.bilingual_out.setPlainText(f"原文：{clean}\n\n译文：{tr}")
+        fam = self.cfg.get("font_family", "") or default_cjk_font()
+        self.bilingual_out.setHtml(bilingual_html(
+            clean, tr, self.cfg.get("font_size", 16),
+            self.cfg.get("translation_font_scale", TRANS_SCALE_DEFAULT), fam))
 
     # ---- 语音朗读 ----
     def toggle_reading(self):

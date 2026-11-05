@@ -233,7 +233,7 @@ def _default_device_name():
         return "device"
 
 
-TRANS_SCALE_MIN, TRANS_SCALE_MAX, TRANS_SCALE_DEFAULT = 0.8, 1.8, 1.1
+TRANS_SCALE_MIN, TRANS_SCALE_MAX, TRANS_SCALE_DEFAULT = 0.8, 1.8, 1.4
 
 
 def clamp_trans_scale(v) -> float:
@@ -283,8 +283,8 @@ DEFAULT_CONFIG = {"font_family": "", "font_size": 15,
                   "azure_tts_key2": "", "azure_tts_region2": "",
                   "theme": DEFAULT_THEME, "recent": [], "library_dirs": [],
                   "bilingual": False, "bilingual_target": "中文",
-                  # 双语面板里译文字号 = 正文字号 × 该倍数（默认 1.1，不小于正文；范围见 TRANS_SCALE_MIN/MAX）
-                  "translation_font_scale": 1.1,
+                  # 双语面板里译文字号 = 正文字号 × 该倍数（默认 1.4，不小于正文；范围见 TRANS_SCALE_MIN/MAX）
+                  "translation_font_scale": 1.4,
                   "flip_effect": DEFAULT_FLIP_EFFECT,
                   "single_page": False,
                   # WebDAV 进度同步（默认关闭；这些键只存本机 config.json，绝不上传）
