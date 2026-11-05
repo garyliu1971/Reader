@@ -144,6 +144,11 @@ def bundled_models_dir():
     if getattr(sys, "frozen", False):
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         roots = [os.path.join(exe_dir, "models")]
+        if sys.platform == "darwin":
+            # .app 包内：<App>.app/Contents/MacOS/PyReader → 资源在 ../Resources（签名后包内只读，另给用户目录兜底）
+            roots.append(os.path.join(os.path.dirname(exe_dir), "Resources", "models"))
+        if sys.platform != "win32":
+            roots.append(os.path.join(os.path.expanduser("~"), ".pyreader", "models"))
     else:
         roots = [os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")]
     for r in roots:
@@ -265,7 +270,10 @@ DEFAULT_CONFIG = {"font_family": "", "font_size": 15,
 def _env_search_paths():
     if getattr(sys, "frozen", False):
         # PyInstaller/安装版：.env 与 exe 同目录（U 盘便携版 / {app} 安装目录）
-        return [Path(os.path.dirname(os.path.abspath(sys.executable))) / ".env"]
+        paths = [Path(os.path.dirname(os.path.abspath(sys.executable))) / ".env"]
+        if sys.platform != "win32":
+            paths.append(Path.home() / ".pyreader" / ".env")   # macOS .app / Linux 系统目录安装后可写的位置
+        return paths
     return [
         Path(__file__).parent.parent / ".env",                            # Reader/.env  ← 发布时放这里
         Path(__file__).parent.parent.parent / "coding-agent" / ".env",   # ../coding-agent/.env
