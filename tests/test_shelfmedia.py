@@ -622,3 +622,29 @@ def test_fmt_label_falls_back_to_filename_for_placeholders():
     assert sh.Book("local:" + "0" * 40, "t", "", 0, "", "", "missing").fmt_label == ""
     assert sh.media_kind("a.MP3") == "audio" and sh.media_kind("b.cbz") == "archive" and sh.media_kind("c.epub") == "book"
     assert sh.media_kind("d.exe") == "" and sh.media_kind(None) == ""
+
+
+# ================================================================== 工具栏「上传到远程书库」（原「远程书库」下拉已移除，浏览走书架）
+def test_toolbar_remote_button_is_upload_only(win, tmp_path, monkeypatch):
+    act = win.remote_act
+    assert act.menu() is None                                 # 不再有下拉（列表 / 浏览入口已去掉）
+    assert "上传" in act.text() and "远程书库" in act.text()
+    for gone in ("remote_menu", "_rebuild_remote_menu", "_fill_remote_menu", "_open_remote_book"):
+        assert not hasattr(win, gone)
+    calls = []
+    monkeypatch.setattr(win.shelf, "start_upload", lambda paths: calls.append(list(paths)) or True)
+    # 未启用 WebDAV：不上传
+    monkeypatch.setattr(win, "_sync_on", lambda: False)
+    act.trigger()
+    assert calls == []
+    # 启用但没打开书：不上传
+    monkeypatch.setattr(win, "_sync_on", lambda: True)
+    win.book_path = None
+    act.trigger()
+    assert calls == []
+    # 启用且已打开书：走书架的上传流程（确认对话框 / skip-existing 等行为都在 start_upload 内）
+    f = tmp_path / "a.txt"
+    f.write_text("x", encoding="utf-8")
+    win.book_path = str(f)
+    act.trigger()
+    assert calls == [[str(f)]]

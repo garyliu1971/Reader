@@ -15,7 +15,7 @@ import hashlib
 from .config import CACHE_DIR
 
 MAX_CACHE_FILES = 50   # 最多缓存 50 本书的章节信息
-PARSER_VERSION = 2     # 章节检测逻辑变化（textio 重写 / 偏移含义变化）时 +1，使旧缓存失效
+PARSER_VERSION = 3     # 章节检测逻辑变化（textio 重写 / 偏移含义变化 / 全文换行合并）时 +1，使旧缓存失效
 
 
 def _cache_key(path: str) -> str:

@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (QDialog, QComboBox, QLineEdit, QCheckBox, QDouble
                                QVBoxLayout, QHBoxLayout, QScrollArea, QWidget, QFrame, QTabWidget,
                                QListWidget, QListWidgetItem, QPushButton, QMessageBox)
 from PySide6.QtGui import QGuiApplication
-from .config import AI_PRESETS, THEMES, DEFAULT_THEME, FLIP_EFFECTS, DEFAULT_FLIP_EFFECT
+from .config import (AI_PRESETS, THEMES, DEFAULT_THEME, FLIP_EFFECTS, DEFAULT_FLIP_EFFECT,
+                     TRANS_SCALE_MIN, TRANS_SCALE_MAX, TRANS_SCALE_DEFAULT, clamp_trans_scale)
 from .tts import TTS_VOICES, TTS_DEFAULT_VOICE, TTS_RATES, winrt_voices, sapi_voices
 from .shelfview import SORT_LABELS as SHELF_SORT_LABELS
 
@@ -53,6 +54,28 @@ class _DavSourceDialog(QDialog):
                 "enabled": self.enabled.isChecked()}
 
 
+class _BookSourceDialog(_DavSourceDialog):
+    """编辑一个 OPDS 在线书源：字段与额外 WebDAV 书库一致，只换标题和占位提示。"""
+
+    def __init__(self, src=None, parent=None):
+        super().__init__(src, parent)
+        self.setWindowTitle("编辑书源" if src else "添加书源")
+        self.type = QComboBox()
+        self.type.addItem("OPDS 目录（Calibre-Web / Kavita / Komga 等自建书库）", "opds")
+        self.type.addItem("Gutenberg 离线目录（pg_catalog.csv）", "gutenberg_catalog")
+        i = self.type.findData((src or {}).get("type", "opds") if isinstance(src, dict) else "opds")
+        self.type.setCurrentIndex(i if i >= 0 else 0)
+        self.layout().itemAt(0).layout().insertRow(0, "类型", self.type)
+        self.name.setPlaceholderText("下载目录名（remote_books/ 下），如 Project Gutenberg（规则同额外书库）")
+        self.url.setPlaceholderText("OPDS 目录地址，如 http(s)://nas:8083/opds；Gutenberg 用默认的 pg_catalog.csv 地址")
+        self.allow_insecure.setText("允许明文 http（不安全，仅限自建 / 内网书源；默认只接受 https）")
+
+    def result_source(self) -> dict:
+        d = super().result_source()
+        d["type"] = self.type.currentData()
+        return d
+
+
 # ============ 设置对话框 ============
 class SettingsDialog(QDialog):
     def __init__(self, cfg, parent=None):
@@ -93,6 +116,10 @@ class SettingsDialog(QDialog):
         self.single_page.setChecked(bool(cfg.get("single_page", False)))
         self.font_size = QSpinBox(); self.font_size.setRange(10, 48)
         self.font_size.setValue(cfg.get("font_size", 16))
+        self.trans_scale = QDoubleSpinBox(); self.trans_scale.setRange(TRANS_SCALE_MIN, TRANS_SCALE_MAX)
+        self.trans_scale.setSingleStep(0.1); self.trans_scale.setDecimals(2); self.trans_scale.setSuffix(" ×正文")
+        self.trans_scale.setToolTip("双语翻译面板中译文字号相对正文字号的倍数；大于 1 则译文比正文更大")
+        self.trans_scale.setValue(clamp_trans_scale(cfg.get("translation_font_scale", TRANS_SCALE_DEFAULT)))
         self.line_spacing = QDoubleSpinBox(); self.line_spacing.setRange(0.8, 3.0)
         self.line_spacing.setSingleStep(0.05); self.line_spacing.setValue(cfg.get("line_spacing", 1.25))
         self.para_spacing = QDoubleSpinBox(); self.para_spacing.setRange(0.0, 3.0)
@@ -161,6 +188,23 @@ class SettingsDialog(QDialog):
         for b in (self._ws_add, self._ws_edit, self._ws_remove):
             ws_h.addWidget(b)
         ws_h.addStretch(1)
+        # 在线书源（OPDS）：书架 / 工具栏「在线书源」对话框里浏览、搜索、下载
+        self.book_sources = [dict(x) for x in (cfg.get("book_sources") or []) if isinstance(x, dict)]
+        self.book_sources_list = QListWidget()
+        self.book_sources_list.setMinimumHeight(72)
+        self.book_sources_list.setToolTip("OPDS 在线书源（如 Project Gutenberg 公版书）；在工具栏「在线书源」里搜索并下载，"
+                                          "下载到 remote_books/<书源名>/。")
+        self._reload_book_sources()
+        bs_add, bs_edit, bs_rm = QPushButton("添加…"), QPushButton("编辑…"), QPushButton("删除")
+        bs_add.clicked.connect(self._add_book_source)
+        bs_edit.clicked.connect(self._edit_book_source)
+        bs_rm.clicked.connect(self._remove_book_source)
+        bs_row = QWidget()
+        bs_h = QHBoxLayout(bs_row)
+        bs_h.setContentsMargins(0, 0, 0, 0)
+        for b in (bs_add, bs_edit, bs_rm):
+            bs_h.addWidget(b)
+        bs_h.addStretch(1)
         # 书架：默认视图 / 默认排序 / 启动时显示书架 / 重置
         self.shelf_view = QComboBox()
         self.shelf_view.addItem("网格", "grid")
@@ -246,6 +290,7 @@ class SettingsDialog(QDialog):
         add(lay, "翻页方式", self.flip_effect)
         add(lay, "单页模式", self.single_page)
         add(lay, "字号", self.font_size)
+        add(lay, "译文字号", self.trans_scale)
         add(lay, "行距", self.line_spacing)
         add(lay, "段落间距", self.para_spacing)
         add(lay, "左右边距", self.margin_x)
@@ -270,6 +315,8 @@ class SettingsDialog(QDialog):
         add(net, "", self.webdav_allow_insecure)
         add(net, "额外书库（只读）", self.webdav_sources_list)
         add(net, "", ws_row)
+        add(net, "在线书源（OPDS）", self.book_sources_list)
+        add(net, "", bs_row)
         add(net, "单个文件上限", self.webdav_max_book)
         add(net, "同步用户名", self.sync_user_name)
         add(net, "设备名", self.device_name)
@@ -335,6 +382,39 @@ class SettingsDialog(QDialog):
             del self.webdav_libraries[row]
             self._reload_sources_list()
 
+    # ---- 在线书源（OPDS）的列表编辑 ----
+    def _reload_book_sources(self):
+        self.book_sources_list.clear()
+        for x in self.book_sources:
+            label = (x.get("name") or "?").strip() + ("" if x.get("enabled", True) else "（停用）")
+            url = (x.get("url") or "").strip()
+            self.book_sources_list.addItem(QListWidgetItem(label + (f"  —  {url}" if url else "")))
+
+    def _add_book_source(self):
+        dlg = _BookSourceDialog(None, self)
+        if dlg.exec():
+            src = dlg.result_source()
+            if self._validate_source(src):
+                self.book_sources.append(src)
+                self._reload_book_sources()
+
+    def _edit_book_source(self):
+        row = self.book_sources_list.currentRow()
+        if row < 0:
+            return
+        dlg = _BookSourceDialog(self.book_sources[row], self)
+        if dlg.exec():
+            src = dlg.result_source()
+            if self._validate_source(src):
+                self.book_sources[row] = src
+                self._reload_book_sources()
+
+    def _remove_book_source(self):
+        row = self.book_sources_list.currentRow()
+        if row >= 0:
+            del self.book_sources[row]
+            self._reload_book_sources()
+
     def _validate_source(self, src: dict) -> bool:
         from .store import safe_segment, is_hidden_name
         name = src.get("name", "")
@@ -344,7 +424,7 @@ class SettingsDialog(QDialog):
                                 "不能是 Windows 保留名（如 CON、NUL）。")
             return False
         if not src.get("url", "").strip():
-            QMessageBox.warning(self, "地址为空", "请填写 WebDAV 地址。")
+            QMessageBox.warning(self, "地址为空", "请填写地址。")
             return False
         return True
 
