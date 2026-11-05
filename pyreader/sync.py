@@ -170,10 +170,13 @@ def resolve_offset(rec: dict, text_len: int) -> int:
 
 
 def download_book(client: WebDavClient, rel: str, size: int, dest_root: Optional[str] = None,
-                  max_bytes: int = MAX_BOOK_BYTES, should_cancel=None, progress=None) -> str:
-    """把 library/<rel> 下载到 <dest_root>/<rel>（默认 remote_books），返回本地路径。阻塞调用，只能在后台线程用。
+                  max_bytes: int = MAX_BOOK_BYTES, should_cancel=None, progress=None,
+                  dest_rel: Optional[str] = None) -> str:
+    """把 library/<rel> 下载到 <dest_root>/<dest_rel>（默认 dest_rel=rel，即 remote_books/<rel>），返回本地路径。
+    阻塞调用，只能在后台线程用。
 
-    - rel 必须是合法相对路径且不含点 / ~$ 开头的段（来自服务器的名字不可信），目标必须落在 dest_root 之内。
+    - rel：WebDAV 上的相对路径（去掉源前缀后的源内路径），必须是合法相对路径且不含点 / ~$ 开头的段。
+    - dest_rel：本机缓存目录下的相对路径（多源时带源前缀），默认等于 rel；同样要合法且落在 dest_root 之内。
     - 本地已有同大小的文件则直接复用（size > 0 时）。
     - 先流式写入 <dest>.part，字节数必须等于列表给出的 size（size <= 0 表示列表没给大小，只校验 Content-Length），
       不符则丢弃 .part、不动旧文件并抛 WebDavError；成功后才 os.replace 成最终路径。
@@ -181,8 +184,11 @@ def download_book(client: WebDavClient, rel: str, size: int, dest_root: Optional
     - progress(已收字节, 总字节)：下载进度回调（调用方节流）。"""
     if normalize_rel(rel) is None or any(is_hidden_name(s) for s in rel.split("/")):
         raise WebDavError("illegal path")
+    dest_rel = dest_rel if dest_rel is not None else rel
+    if normalize_rel(dest_rel) is None or any(is_hidden_name(s) for s in dest_rel.split("/")):
+        raise WebDavError("illegal path")
     root = os.path.abspath(dest_root or REMOTE_BOOKS_DIR)
-    dest = os.path.abspath(os.path.join(root, *rel.split("/")))
+    dest = os.path.abspath(os.path.join(root, *dest_rel.split("/")))
     if not dest.startswith(root + os.sep):
         raise WebDavError("illegal path")
     size = int(size or 0)

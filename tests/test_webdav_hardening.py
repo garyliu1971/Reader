@@ -458,3 +458,13 @@ def test_client_from_cfg_insecure_opt_in():
     cfg = {"webdav_enabled": True, "webdav_url": "http://example.com/dav", "webdav_user": "b", "webdav_password": "p"}
     assert webdav.client_from_cfg(cfg).allow_insecure_auth is False
     assert webdav.client_from_cfg({**cfg, "webdav_allow_insecure": True}).allow_insecure_auth is True
+
+
+def test_client_normalizes_non_ascii_base_url(server):
+    """base_url 里的中文（如 alist 挂载路径 /dav/夸克）要能被百分比编码：urllib 不自动编码，否则抛 UnicodeEncodeError。"""
+    h, url = server
+    h.dirs.update({"/dav", "/dav/夸克", "/dav/夸克/library"})
+    h.files["/dav/夸克/library/三体.epub"] = b"x"
+    c = WebDavClient(url + "/夸克")
+    assert c.base == (url + "/%E5%A4%B8%E5%85%8B").rstrip("/")
+    assert [e.name for e in c.propfind("library", 1)] == ["三体.epub"]

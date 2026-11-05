@@ -30,7 +30,7 @@ from . import sync as syncmod
 from .config import _log_net
 from .store import is_hidden_name, load_json, safe_component, safe_segment, save_json
 from .sync import MAX_BOOK_BYTES, download_book, max_book_bytes
-from .webdav import JSON_MAX_BYTES, MAX_FILES, WebDavClient, WebDavError, client_from_cfg
+from .webdav import JSON_MAX_BYTES, MAX_FILES, WebDavClient, WebDavError, client_from_cfg, client_from_source, library_sources
 
 LIBRARY = "library"
 STABLE_SECONDS = 60          # mtime 距今不足这个秒数的文件视为「还在上传」
@@ -56,16 +56,18 @@ class Listing:
         return [f for f in self.files if f.rel not in self.unstable]
 
     def problem(self) -> str:
-        """列表不完整时给用户看的一句话（完整则为空）。"""
+        """列表不完整时给用户看的一句话（完整则为空）。多源时能区分「没 library 目录」「触上限」「某些源/子目录读失败」。"""
         if self.complete:
             return ""
-        if self.root_missing:
-            return "云端没有 library 文件夹"
         parts = []
+        if self.root_missing:
+            parts.append("云端没有 library 文件夹")
         if self.truncated:
             parts.append(f"书库超过读取上限（{MAX_FILES} 本），只显示了一部分")
         if self.errors:
-            parts.append(f"{len(self.errors)} 个文件夹读取失败")
+            detail = "、".join(str(e)[:48] for e in self.errors[:2])
+            more = f" 等 {len(self.errors)} 个" if len(self.errors) > 2 else ""
+            parts.append(f"{len(self.errors)} 个来源/文件夹读取失败（{detail}{more}）")
         return "；".join(parts) or "云端列表不完整"
 
 
@@ -86,10 +88,11 @@ def _is_unstable(rf: sh.RemoteFile, prev_sizes: Optional[Dict[str, int]], now: f
 
 def fetch_library(client: WebDavClient, prev_sizes: Optional[Dict[str, int]] = None,
                   now: Optional[float] = None, max_files: int = MAX_FILES,
-                  trusted: Optional[Dict[str, int]] = None) -> Listing:
+                  trusted: Optional[Dict[str, int]] = None, prefix: str = "") -> Listing:
     """列 <base>/library。阻塞调用，只能在后台线程用。网络 / 协议错误抛 WebDavError（调用方负责接住）；
     library 目录不存在（404）不抛，返回 root_missing 的不完整列表。
 
+    prefix：给每个 rel 加的前缀（多数据源时 = 源名，形如 源名/rel；主源为空字符串）。
     名字过滤：BOOK_EXTS、点 / ~$ 开头、rel 校验（valid_remote_rel）。稳定性：见 _is_unstable。"""
     now = time.time() if now is None else now
     try:
@@ -102,6 +105,7 @@ def fetch_library(client: WebDavClient, prev_sizes: Optional[Dict[str, int]] = N
     seen = set()
     skipped = tree.skipped
     for rel, ent in tree.files:
+        rel = (prefix + "/" + rel) if prefix else rel
         if not sh.valid_remote_rel(rel) or rel in seen:
             skipped += 1
             continue
@@ -824,9 +828,31 @@ class ShelfSyncWorker(QObject):
         self._io = threading.Lock()                        # 进度同步 / 推送共用：同一时间只有一个书架同步任务在碰设备文件（单飞）
 
     # ------------------------------------------------------------ 列表（单飞：同一时间只有一个，后到者合并为「再跑一次」）
+    def _library_clients(self, cfg: dict) -> List[tuple]:
+        """(前缀, 显示名, client) 列表：主源在前（用注入/默认工厂，兼容测试），额外只读源在后（真实 client）。"""
+        out: List[tuple] = []
+        primary = self._factory(cfg)
+        if primary is not None:
+            out.append(("", "主书库", primary))
+        for src in library_sources(cfg):
+            if src["id"]:                      # 只取额外源（主源 id 为空，已在上一步处理）
+                c = client_from_source(src)
+                if c is not None:
+                    out.append((src["id"], src["name"], c))
+        return out
+
+    def _client_for_rel(self, cfg: dict, rel: str) -> tuple:
+        """把书架 rel 解析成 (client, 源内相对路径)。前缀命中额外源则用该源并去前缀，否则回落到主源。"""
+        first = (rel or "").split("/", 1)[0]
+        for src in library_sources(cfg):
+            if src["id"] and src["id"] == first:
+                c = client_from_source(src)
+                return c, (rel[len(first) + 1:] if len(rel) > len(first) else "")
+        return self._factory(cfg), rel
+
     def refresh(self, cfg: dict) -> Optional[threading.Thread]:
-        """未启用 WebDAV（工厂返回 None）时是空操作，返回 None。已有一轮在跑则登记「再跑一次」，也返回 None。"""
-        if self._factory(cfg) is None:
+        """没有任何可用的书库源时是空操作，返回 None。已有一轮在跑则登记「再跑一次」，也返回 None。"""
+        if not self._library_clients(cfg):
             return None
         with self._lock:
             self._cfg = cfg
@@ -843,13 +869,37 @@ class ShelfSyncWorker(QObject):
             with self._lock:
                 cfg = self._cfg
             try:
-                client = self._factory(cfg)
-                if client is None:
+                clients = self._library_clients(cfg)
+                if not clients:
                     raise WebDavError("WebDAV 未启用")
-                lst = fetch_library(client, self._prev_sizes, trusted=dict(self._trusted))
-                self._prev_sizes = {f.rel: f.size for f in lst.files}
+                merged = Listing()
+                complete = True
+                any_ok = False
+                for prefix, name, client in clients:
+                    try:
+                        lst = fetch_library(client, self._prev_sizes, trusted=dict(self._trusted), prefix=prefix)
+                    except WebDavError as e:
+                        _log_net(f"[书架] 读取书库 {name} 失败: {e}")
+                        complete = False
+                        merged.errors.append(f"{name}: {str(e)[:80]}")
+                        continue
+                    any_ok = True
+                    merged.files.extend(lst.files)
+                    merged.unstable |= lst.unstable
+                    merged.skipped += lst.skipped
+                    merged.errors.extend(lst.errors)
+                    merged.truncated = merged.truncated or lst.truncated
+                    if lst.root_missing:
+                        merged.root_missing = True
+                    if not lst.complete:
+                        complete = False
+                if not any_ok:                     # 所有源都读不了（离线 / 认证失败）：走 listFailed，调用方保留本地缓存
+                    raise WebDavError("；".join(merged.errors) or "WebDAV 未启用")
+                merged.fetched_at = time.time()
+                merged.complete = complete
+                self._prev_sizes = {f.rel: f.size for f in merged.files}
                 self.generation += 1
-                self.listed.emit(lst)
+                self.listed.emit(merged)
             except Exception as e:                   # 离线 / 401 / 5xx / 解析错误：只报告，绝不抛
                 _log_net(f"[书架] 读取云端书库失败: {e}")
                 try:
@@ -865,10 +915,11 @@ class ShelfSyncWorker(QObject):
 
     # ------------------------------------------------------------ 下载（与打开解耦，带 token）
     def download(self, cfg: dict, rel: str, size: int, open_when_done: bool, token) -> Optional[threading.Thread]:
-        """下载 library/<rel> 到 remote_books/<rel>。完成经 downloadedFor(token, path)，失败经 downloadFailed(token, msg)。
+        """下载 library/<rel> 到 remote_books/<rel>（多源时 rel 带源前缀，WebDAV 请求路径会去掉前缀）。
+        完成经 downloadedFor(token, path)，失败经 downloadFailed(token, msg)。
         open_when_done 只影响状态提示文字：「要不要打开」由调用方按 token 是否仍然有效决定（迟到的完成不会劫持窗口）。
-        同一个 rel 已在下载时，新的 token 并入同一次下载（返回 None）。未启用 WebDAV 返回 None。"""
-        client = self._factory(cfg)
+        同一个 rel 已在下载时，新的 token 并入同一次下载（返回 None）。没有可用源返回 None。"""
+        client, raw_rel = self._client_for_rel(cfg, rel)
         if client is None:
             return None
         max_bytes = max_book_bytes(cfg)
@@ -894,7 +945,7 @@ class ShelfSyncWorker(QObject):
                 for tok in toks:
                     self.downloadProgress.emit(tok, done, total)
             try:
-                path = download_book(client, rel, size, max_bytes=max_bytes, progress=report)
+                path = download_book(client, raw_rel, size, max_bytes=max_bytes, progress=report, dest_rel=rel)
             except Exception as e:
                 _log_net(f"[书架] 下载失败 {rel}: {e}")
                 err = f"下载失败：{rel.rsplit('/', 1)[-1]}（{str(e)[:120]}）"

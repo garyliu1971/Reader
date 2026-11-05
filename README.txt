@@ -58,8 +58,9 @@ PyReader —— 基于 Python 的文本小说阅读器
   19. 支持 epub / html / htm / mobi / azw / azw3 / prc / pdf 格式（自动解析章节与书名）
   20. 双语朗读（工具栏“🌐 双语”）：朗读时 AI 自动翻译并显示原文/译文，
       支持翻成中文或英文，译文随朗读逐句更新
-  21. 离线语音朗读（Piper，无需联网）：内置中文 Huayan / 英文 Lessac 两个
-      离线音色，首次使用自动从国内镜像下载模型（约 60MB），之后完全本地合成
+  21. 离线语音朗读（无需联网）：内置 Melo（中英混读，默认）/ Piper（英）/ Kokoro-82M
+      （中英混读4音色）三种离线引擎；另支持 Windows 系统自带语音（含可添加的
+      晓晓/云希等自然音色），首次使用自动从国内镜像下载模型（Piper 约 60MB）
   22. Markdown 富文本渲染（.md 文件）：标题分级、粗体/斜体/删除线、行内代码、
       围栏代码块、有序/无序/嵌套列表、引用块、表格、链接、分隔线；
       目录按标题级别缩进，正文连续排版（接近专业 md 阅读器）
@@ -89,6 +90,7 @@ PyReader —— 基于 Python 的文本小说阅读器
 【依赖安装】
   pip install PySide6          # 图形界面（标准安装即含 QtMultimedia）
   pip install sherpa-onnx     # 语音朗读（Melo 离线中英混读，可选）
+  pip install winsdk          # Windows 系统语音朗读（调用系统 OneCore 音色，可选）
   pip install mobi            # Kindle 格式支持（mobi/azw/azw3/prc，可选）
   pip install pymupdf         # PDF 电子书（可选，仅限有文字层的 PDF）
   pip install python-docx     # Word 文档 docx（可选）
@@ -185,6 +187,7 @@ PyReader —— 基于 Python 的文本小说阅读器
 【依赖安装】
   pip install PySide6          # 图形界面（标准安装即含 QtMultimedia）
   pip install sherpa-onnx     # 语音朗读（Melo 离线中英混读，可选）
+  pip install winsdk          # Windows 系统语音朗读（调用系统 OneCore 音色，可选）
   pip install mobi            # Kindle 格式支持（mobi/azw/azw3/prc，可选）
   pip install pymupdf         # PDF 电子书（可选，仅限有文字层的 PDF）
   pip install python-docx     # Word 文档 docx（可选）
@@ -254,6 +257,12 @@ PyReader —— 基于 Python 的文本小说阅读器
     日语音色  Nanami / Keita
     离线音色  Melo（中英混读，默认，首次自动下载约 190MB）/ Lessac（英）/
               Kokoro-82M（中英混读·女/男4音色，备选，中文自然度较 Melo 差，首次自动下载约 140MB），均无需联网
+    系统音色  音色列表末尾自动列出 Windows 已安装的 OneCore 语音（如 Huihui/Yaoyao/Zira），
+              完全离线、无需联网/Key。
+              注意：Windows「讲述人自然语音」（晓晓/云希/云扬等）是讲述人专用的第三套语音系统
+              （装成 AppX 包，不走 Speech_OneCore），本程序（WinRT）列不到也调不到；
+              要用它们需借助第三方 NaturalVoiceSAPIAdapter（SAPI 通道）。
+              离线自然中文推荐用 Melo（默认）；要晓晓/云希声线可用在线 Azure Speech 或 edge-tts
     在线音色  Azure Speech（中/英/日/韩/法/德/西），设置里填 Key 和区域（config.json: azure_tts_key / azure_tts_region）
     朗读语速  -50% ~ +100%
 

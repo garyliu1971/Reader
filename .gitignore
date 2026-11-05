@@ -35,3 +35,6 @@ Thumbs.db
 installer_models/
 models/
 prep_models.log
+
+# 第三方自然语音适配器二进制（NaturalVoiceSAPIAdapter，约 30MB，不入库；安装包构建时手动放置）
+third_party/nvsapi/

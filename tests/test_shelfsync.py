@@ -416,3 +416,37 @@ def test_worker_download_same_rel_merges_tokens(server, tmp_path, monkeypatch):
     t.join(10)
     assert pump(lambda: len(ok) == 2) and sorted(ok) == [1, 2]
     assert [r for r in h.log if r[0] == "GET" and r[1].endswith("a.txt")].__len__() == 1
+
+
+def test_worker_multiple_sources_list_and_download(monkeypatch, tmp_path):
+    """多数据源：主源 rel 不带前缀，额外源以源名作前缀；下载额外源的书打到对应服务器、落到带前缀的本地目录。"""
+    import fakedav
+    srv1, h1, url1 = fakedav.start()
+    srv2, h2, url2 = fakedav.start()
+    try:
+        put_book(h1, "主库/一.txt", b"111")
+        put_book(h2, "子目录/二.txt", b"2222")
+        monkeypatch.setattr(sync, "REMOTE_BOOKS_DIR", str(tmp_path / "rb"))
+        cfg = {"webdav_enabled": True, "webdav_url": url1,
+               "webdav_libraries": [{"name": "夸克", "url": url2, "enabled": True}]}
+        w = ss.ShelfSyncWorker()
+        got, failed = [], []
+        w.listed.connect(got.append)
+        w.listFailed.connect(failed.append)
+        w.refresh(cfg).join(10)
+        assert pump(lambda: got) and not failed
+        assert rels(got[0].files) == ["主库/一.txt", "夸克/子目录/二.txt"]
+        assert got[0].complete
+        # 下载额外源的书：请求打到 url2 的 library/子目录/二.txt，本地落到 remote_books/夸克/子目录/二.txt
+        ok, bad = [], []
+        w.downloadedFor.connect(lambda tok, p: ok.append((tok, p)))
+        w.downloadFailed.connect(lambda tok, m: bad.append((tok, m)))
+        w.download(cfg, "夸克/子目录/二.txt", 4, False, 9).join(10)
+        assert pump(lambda: ok) and not bad
+        assert ok == [(9, str(tmp_path / "rb" / "夸克" / "子目录" / "二.txt"))]
+        gets2 = [r for r in h2.log if r[0] == "GET"]
+        assert gets2 and gets2[-1][1].endswith("/library/子目录/二.txt")
+        assert not [r for r in h1.log if r[0] == "GET" and "二.txt" in r[1]]   # 主源不应收到额外源的下载
+    finally:
+        srv1.shutdown(); srv1.server_close()
+        srv2.shutdown(); srv2.server_close()
