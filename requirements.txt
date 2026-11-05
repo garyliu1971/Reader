@@ -1,0 +1,16 @@
+# PyReader 依赖（跨平台）。Windows 安装包的构建仍用 PyReader.spec，见 README。
+PySide6>=6.7
+sherpa-onnx
+mobi
+pymupdf>=1.24
+python-docx
+python-pptx
+piper-tts
+edge-tts
+pillow
+lxml
+numpy
+loguru
+# Windows 专用：系统语音（WinRT / SAPI5）
+winsdk; sys_platform == "win32"
+comtypes; sys_platform == "win32"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PyReader
+Name[zh_CN]=PyReader 阅读器
+Comment=Novel / e-book reader with offline text-to-speech
+Comment[zh_CN]=小说 / 电子书阅读器，支持离线朗读
+Exec=PyReader %F
+Icon=pyreader
+Terminal=false
+Categories=Office;Viewer;
+MimeType=text/plain;application/pdf;application/epub+zip;

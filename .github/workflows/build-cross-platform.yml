@@ -1,0 +1,64 @@
+name: build-cross-platform
+# 在各平台 / 架构的原生 runner 上构建 Linux 与 macOS 安装包（PyInstaller 不能交叉编译）。
+# Windows 安装包仍由 build_installer.py + Inno Setup 在本机构建。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本号
+        default: "0.4.0"
+  push:
+    tags: ["v*"]
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, arch: x86_64 }
+          - { os: ubuntu-24.04-arm, arch: aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: System libs for Qt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libpulse0 libxcb-shape0 libsm6 libice6 libxrandr2
+      - name: Fetch appimagetool
+        run: |
+          curl -fsSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage"
+          chmod +x appimagetool
+          echo "APPIMAGETOOL=$PWD/appimagetool --appimage-extract-and-run" >> "$GITHUB_ENV"
+      - name: Build
+        run: bash packaging/linux/build_linux.sh "${{ inputs.version || '0.4.0' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyreader-linux-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, arch: arm64 }
+          - { os: macos-13, arch: x86_64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build (unsigned unless MAC_CODESIGN_IDENTITY secret is configured)
+        env:
+          MAC_CODESIGN_IDENTITY: ${{ secrets.MAC_CODESIGN_IDENTITY }}
+        run: bash packaging/macos/build_macos.sh "${{ inputs.version || '0.4.0' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyreader-macos-${{ matrix.arch }}
+          path: dist/*.dmg
