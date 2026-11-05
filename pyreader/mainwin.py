@@ -4,7 +4,8 @@ import threading
 import time as _time
 from typing import Optional
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon, QDesktopServices, QKeySequence, QCursor
+from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QIcon, QDesktopServices, QKeySequence, QCursor,
+                           QAction)
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QListWidget, QListWidgetItem,
                                QToolBar, QMenu, QFontDialog, QTextEdit, QVBoxLayout, QLabel,
                                QFileDialog, QMessageBox, QProgressBar, QSlider, QDockWidget,
@@ -293,66 +294,62 @@ class MainWindow(QMainWindow):
             self.load_book(book_path)
 
     def _build_toolbar(self):
+        """工具栏布局原则：常用入口排最左、按钮用「emoji + tooltip」保持窄，同类功能合并成一个下拉菜单。
+        默认窗口 1280 宽，全部按钮加起来超出就会被 Qt 塞进右侧「»」溢出菜单（书架以前就掉进去了）。"""
         tb = QToolBar(); self.addToolBar(tb)
         self._toolbar = tb
+        tb.setMovable(False)              # 锁住顺序：拖动重排会让常用项跑到溢出菜单里去
 
         def R(act):                       # 登记「依赖阅读页」的动作：书架可见时禁用
             self._reader_acts.append(act)
             return act
-        tb.addAction("打开", self.open_book)
-        tb.addAction("字体", self.choose_font)
-        tb.addAction("设置", self.open_settings)
-        tb.addAction("⛶ 全屏", self.toggle_fullscreen).setToolTip("全屏阅读 (F11)；全屏时鼠标移到顶部显示工具栏")
+
+        def tip(act, text):               # 紧凑按钮：emoji 当图标，说明放 tooltip
+            act.setToolTip(text)
+            return act
+
+        # ---- 书架：主入口（Ctrl+B），固定最左，不会被挤进溢出菜单 ----
+        self.shelf_act = tb.addAction("📖 书架")
+        self.shelf_act.setCheckable(True)
+        self.shelf_act.setShortcut(QKeySequence("Ctrl+B"))
+        self.shelf_act.setToolTip("书架 (Ctrl+B)；阅读页按 Esc 也回书架")
+        self.shelf_act.triggered.connect(self._on_shelf_act)
+        tb.addAction("📂 打开", self.open_book).setToolTip("打开电子书")
+        tip(tb.addAction("⛶", self.toggle_fullscreen), "全屏 (F11)；全屏时鼠标移到顶部显示工具栏")
         tb.addSeparator()
-        R(tb.addAction("◀ 上一页", lambda: self.view.flip(-1)))
-        R(tb.addAction("下一页 ▶", lambda: self.view.flip(1)))
-        R(tb.addAction("添加书签", self.add_bookmark))
-        self.single_act = R(tb.addAction("📄 单页", lambda: self.set_single_page(self.single_act.isChecked())))
+        # ---- 翻页 / 书签 / 版式 ----
+        tip(R(tb.addAction("◀", lambda: self.view.flip(-1))), "上一页")
+        tip(R(tb.addAction("▶", lambda: self.view.flip(1))), "下一页")
+        tip(R(tb.addAction("🔖", self.add_bookmark)), "添加书签（阅读页右键菜单里也有）")
+        self.single_act = tip(R(tb.addAction("📄", lambda: self.set_single_page(self.single_act.isChecked()))),
+                              "单页 / 双页跨页 切换")
         self.single_act.setCheckable(True)
-        self.single_act.setToolTip("单页 / 双页跨页 切换")
         tb.addSeparator()
-        self.tts_act = R(tb.addAction("🔊 朗读", self.toggle_reading))
-        self.stop_act = R(tb.addAction("⏹ 停止", self.stop_reading))
+        # ---- 朗读 / 双语 / 定时 ----
+        self.tts_act = tip(R(tb.addAction("🔊", self.toggle_reading)), "朗读全书")
+        self.stop_act = tip(R(tb.addAction("⏹", self.stop_reading)), "停止朗读")
         self.stop_act.setEnabled(False)
-        self.bilingual_act = R(tb.addAction("🌐 双语", self.toggle_bilingual))
+        self.bilingual_act = tip(R(tb.addAction("🌐", self.toggle_bilingual)), "双语对照翻译")
         self.bilingual_act.setCheckable(True)
-        self.sleep_act = R(tb.addAction("⏰ 定时"))
+        self.sleep_act = tip(R(tb.addAction("⏰")), "定时关闭（睡前听书）")
         self.sleep_act.setMenu(self._build_sleep_menu())
         tb.addSeparator()
-        tb.addAction(self.toc_dock.toggleViewAction())   # 目录 显示/隐藏
-        tb.addAction(self.ai_dock.toggleViewAction())    # AI 工具 显示/隐藏
-        # 主题快速切换色板
-        theme_btn = QToolButton(self)
-        theme_btn.setText("🎨")
-        theme_btn.setToolTip("快速切换主题")
-        theme_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.theme_menu = QMenu(self)
-        self._rebuild_theme_menu()
-        theme_btn.setMenu(self.theme_menu)
-        tb.addWidget(theme_btn)
-        tb.addSeparator()
-        # 最近打开（下拉菜单）
-        self.recent_menu = QMenu("最近打开", self)
-        self.recent_act = tb.addAction("🕘 最近")
-        self.recent_act.setMenu(self.recent_menu)
+        # ---- 书库：一个下拉装「最近打开 / 本地书库目录 / 上传到远程书库」 ----
+        self.recent_menu = QMenu("🕘 最近打开", self)
+        # 上传到远程书库（WebDAV <base>/library）：只保留上传，作为书库菜单项；
+        # 浏览 / 下载云端书走书架（Ctrl+B）。menu() 必须保持 None（见 test_shelfmedia）。
+        self.remote_act = QAction("☁️ 上传当前书到远程书库", self)
+        self.remote_act.setToolTip("把当前打开的书上传到云端书库（WebDAV）；浏览 / 下载云端书请用书架 (Ctrl+B)")
+        self.remote_act.triggered.connect(lambda *_: self._upload_current_book())
         # 书库目录（如移动云盘同步文件夹）：每次展开菜单时重新扫描，新同步的书自动出现
         self.library_menu = QMenu("书库", self)
         self.library_menu.aboutToShow.connect(self._rebuild_library_menu)
         self.library_act = tb.addAction("📚 书库")
         self.library_act.setMenu(self.library_menu)
-        # 上传到远程书库（WebDAV <base>/library）：只保留上传；浏览 / 下载云端书走书架（Ctrl+B）
-        self.remote_act = tb.addAction("☁️ 上传到远程书库", self._upload_current_book)
-        self.remote_act.setToolTip("把当前打开的书上传到云端书库（WebDAV）；浏览 / 下载云端书请用书架 (Ctrl+B)")
+        self.library_act.setToolTip("最近打开 / 本地书库目录 / 上传到远程书库")
         # 在线书源（OPDS）：独立对话框，见 booksourcedlg.py
-        tb.addAction("🌐 在线书源", self.open_book_sources).setToolTip("浏览 / 搜索在线书源（如 Project Gutenberg）并下载")
-        # 书架（可勾选，Ctrl+B；阅读页按 Esc 也回书架）
-        self.shelf_act = tb.addAction("📖 书架")
-        self.shelf_act.setCheckable(True)
-        self.shelf_act.setShortcut(QKeySequence("Ctrl+B"))
-        self.shelf_act.setToolTip("书架 (Ctrl+B)")
-        self.shelf_act.triggered.connect(self._on_shelf_act)
-        tb.addSeparator()
-        # AI 辅助功能组
+        tip(tb.addAction("📡", self.open_book_sources), "在线书源（OPDS / Gutenberg）：浏览、搜索、下载")
+        # ---- AI 辅助功能组 ----
         ai_menu = QMenu("AI 功能", self)
         ai_menu.addAction("📝 章节摘要", self._ai_summarize)
         ai_menu.addAction("🗺️ 思维导图", self._ai_mindmap)
@@ -362,9 +359,32 @@ class MainWindow(QMainWindow):
         ai_menu.addSeparator()
         ai_menu.addAction("😊 情感分析（选中文字）", self._ai_sentiment_selection)
         ai_menu.addAction("🔍 背景解读（选中文字）", self._ai_background_selection)
-        self.ai_menu_act = R(tb.addAction("🤖 AI功能"))
+        self.ai_menu_act = R(tb.addAction("🤖 AI"))
         self.ai_menu_act.setMenu(ai_menu)
-        # 全文搜索
+        self.ai_menu_act.setToolTip("AI 功能：摘要 / 思维导图 / 续写 / 知识图谱 / 情感分析 / 背景解读")
+        # ---- 主题快速切换色板 ----
+        theme_btn = QToolButton(self)
+        theme_btn.setText("🎨")
+        theme_btn.setToolTip("快速切换主题")
+        theme_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.theme_menu = QMenu(self)
+        self._rebuild_theme_menu()
+        theme_btn.setMenu(self.theme_menu)
+        tb.addWidget(theme_btn)
+        # ---- ⚙️ 下拉：面板 / 字体 / 设置（低频功能收进来，少占工具栏） ----
+        more_btn = QToolButton(self)
+        more_btn.setText("⚙️")
+        more_btn.setToolTip("面板（目录 / AI 工具）、字体、设置")
+        more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more_menu = QMenu(self)
+        more_menu.addAction(self.toc_dock.toggleViewAction())   # 目录 显示/隐藏
+        more_menu.addAction(self.ai_dock.toggleViewAction())    # AI 工具 显示/隐藏
+        more_menu.addSeparator()
+        more_menu.addAction("🔤 字体…", self.choose_font)
+        more_menu.addAction("⚙️ 设置…", self.open_settings)
+        more_btn.setMenu(more_menu)
+        tb.addWidget(more_btn)
+        # ---- 全文搜索 ----
         tb.addSeparator()
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("搜索 Ctrl+F")
@@ -373,8 +393,8 @@ class MainWindow(QMainWindow):
         self.search_box.returnPressed.connect(self._search_next)
         tb.addWidget(self.search_box)
         self._reader_widgets.append(self.search_box)
-        R(tb.addAction("↑", self._search_prev))
-        R(tb.addAction("↓", self._search_next))
+        tip(R(tb.addAction("↑", self._search_prev)), "上一个匹配")
+        tip(R(tb.addAction("↓", self._search_next)), "下一个匹配")
 
     # ---- 书架 / 阅读页切换 ----
     def _shelf_context(self):
@@ -729,6 +749,9 @@ class MainWindow(QMainWindow):
     def _rebuild_library_menu(self):
         m = self.library_menu
         m.clear()
+        # 最近打开：原来占一个独立工具栏按钮，现在作为书库菜单的第一项（顺便每次展开都刷新）
+        self._rebuild_recent_menu()
+        m.addMenu(self.recent_menu)
         dirs = [d for d in self.cfg.get("library_dirs", []) if os.path.isdir(d)]
         for d in dirs:
             sub = m.addMenu(os.path.basename(d.rstrip("\\/")) or d)
@@ -757,6 +780,8 @@ class MainWindow(QMainWindow):
             rm = m.addMenu("➖ 移除书库目录")
             for d in self.cfg["library_dirs"]:
                 rm.addAction(d, lambda d=d: self._remove_library_dir(d))
+        m.addSeparator()
+        m.addAction(self.remote_act)          # ☁️ 上传当前书到远程书库（WebDAV）
 
     # ---- WebDAV：远程书库 / 进度同步 ----
     def _sync_on(self):
@@ -1734,12 +1759,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("已停止朗读")
 
     def _update_tts_actions(self):
+        # 工具栏按钮只留 emoji（窄），状态说明放 tooltip，避免按钮宽度随状态变化
         if self.tts_on and not self.tts_paused:
-            self.tts_act.setText("⏸ 暂停朗读"); self.stop_act.setEnabled(True)
+            self.tts_act.setText("⏸"); self.tts_act.setToolTip("暂停朗读"); self.stop_act.setEnabled(True)
         elif self.tts_on and self.tts_paused:
-            self.tts_act.setText("▶ 继续朗读"); self.stop_act.setEnabled(True)
+            self.tts_act.setText("▶"); self.tts_act.setToolTip("继续朗读"); self.stop_act.setEnabled(True)
         else:
-            self.tts_act.setText("🔊 朗读"); self.stop_act.setEnabled(False)
+            self.tts_act.setText("🔊"); self.tts_act.setToolTip("朗读全书"); self.stop_act.setEnabled(False)
         if self._shelf_visible():
             self.stop_act.setEnabled(False)     # 书架可见：依赖阅读页的动作一律禁用
 
