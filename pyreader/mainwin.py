@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QListWidget, 
 from .config import (view_count, view_of_page, CONFIG_PATH, BOOKMARKS_PATH, OUTER, MARGIN_X, MARGIN_Y, GUTTER,
                      load_env_defaults,
                      LINE_SPACING, PARA_SPACING, _HAS_MULTIMEDIA,
-                     load_json, save_json, default_cjk_font, THEMES, DEFAULT_THEME, DEFAULT_CONFIG,
+                     load_json, save_json, default_cjk_font, clamp_trans_scale, bilingual_html, TRANS_SCALE_DEFAULT, THEMES, DEFAULT_THEME, DEFAULT_CONFIG,
                      FLIP_EFFECTS, DEFAULT_FLIP_EFFECT, set_net_proxy)
 from .ttsplayer import TtsPlayer
 from .comicview import ComicView
@@ -1190,7 +1190,8 @@ class MainWindow(QMainWindow):
                 "api_key": dlg.key.text().strip(), "api_base": dlg.base.text().strip(),
                 "model": dlg.model.text().strip(), "api_version": dlg.api_version.text().strip(),
                 "font_family": dlg.font_family.currentData(),
-                "font_size": dlg.font_size.value(), "line_spacing": dlg.line_spacing.value(),
+                "font_size": dlg.font_size.value(),
+                "translation_font_scale": clamp_trans_scale(dlg.trans_scale.value()), "line_spacing": dlg.line_spacing.value(),
                 "para_spacing": dlg.para_spacing.value(),
                 "margin_x": dlg.margin_x.value(), "margin_y": dlg.margin_y.value(),
                 "outer": dlg.outer.value(), "gutter": dlg.gutter.value(),
@@ -1241,6 +1242,8 @@ class MainWindow(QMainWindow):
             else:
                 self.bilingual_dock.hide()
             self._update_bilingual_act()
+            if self.bilingual_on:
+                self._update_bilingual(self.tts_idx)    # 译文字号可能变了：立即重绘面板
             self.reload_current()
 
     def _show_ctx_menu(self, pos):

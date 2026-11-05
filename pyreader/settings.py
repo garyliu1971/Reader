@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (QDialog, QComboBox, QLineEdit, QCheckBox, QDouble
                                QVBoxLayout, QHBoxLayout, QScrollArea, QWidget, QFrame, QTabWidget,
                                QListWidget, QListWidgetItem, QPushButton, QMessageBox)
 from PySide6.QtGui import QGuiApplication
-from .config import AI_PRESETS, THEMES, DEFAULT_THEME, FLIP_EFFECTS, DEFAULT_FLIP_EFFECT
+from .config import (AI_PRESETS, THEMES, DEFAULT_THEME, FLIP_EFFECTS, DEFAULT_FLIP_EFFECT,
+                     TRANS_SCALE_MIN, TRANS_SCALE_MAX, TRANS_SCALE_DEFAULT, clamp_trans_scale)
 from .tts import TTS_VOICES, TTS_DEFAULT_VOICE, TTS_RATES, winrt_voices, sapi_voices
 from .shelfview import SORT_LABELS as SHELF_SORT_LABELS
 
@@ -115,6 +116,10 @@ class SettingsDialog(QDialog):
         self.single_page.setChecked(bool(cfg.get("single_page", False)))
         self.font_size = QSpinBox(); self.font_size.setRange(10, 48)
         self.font_size.setValue(cfg.get("font_size", 16))
+        self.trans_scale = QDoubleSpinBox(); self.trans_scale.setRange(TRANS_SCALE_MIN, TRANS_SCALE_MAX)
+        self.trans_scale.setSingleStep(0.1); self.trans_scale.setDecimals(2); self.trans_scale.setSuffix(" ×正文")
+        self.trans_scale.setToolTip("双语翻译面板中译文字号相对正文字号的倍数；大于 1 则译文比正文更大")
+        self.trans_scale.setValue(clamp_trans_scale(cfg.get("translation_font_scale", TRANS_SCALE_DEFAULT)))
         self.line_spacing = QDoubleSpinBox(); self.line_spacing.setRange(0.8, 3.0)
         self.line_spacing.setSingleStep(0.05); self.line_spacing.setValue(cfg.get("line_spacing", 1.25))
         self.para_spacing = QDoubleSpinBox(); self.para_spacing.setRange(0.0, 3.0)
@@ -285,6 +290,7 @@ class SettingsDialog(QDialog):
         add(lay, "翻页方式", self.flip_effect)
         add(lay, "单页模式", self.single_page)
         add(lay, "字号", self.font_size)
+        add(lay, "译文字号", self.trans_scale)
         add(lay, "行距", self.line_spacing)
         add(lay, "段落间距", self.para_spacing)
         add(lay, "左右边距", self.margin_x)

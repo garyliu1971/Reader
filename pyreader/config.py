@@ -228,6 +228,43 @@ def _default_device_name():
         return "device"
 
 
+TRANS_SCALE_MIN, TRANS_SCALE_MAX, TRANS_SCALE_DEFAULT = 0.8, 1.8, 1.1
+
+
+def clamp_trans_scale(v) -> float:
+    """译文字号倍数：非法值回退默认，越界钳制到 [0.8, 1.8]。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return TRANS_SCALE_DEFAULT
+    if f != f:  # NaN
+        return TRANS_SCALE_DEFAULT
+    return max(TRANS_SCALE_MIN, min(TRANS_SCALE_MAX, f))
+
+
+def translation_point_size(body_pt, scale) -> float:
+    """译文字号（pt）= 正文字号 × 倍数。"""
+    try:
+        b = float(body_pt)
+    except (TypeError, ValueError):
+        b = 15.0
+    return round(b * clamp_trans_scale(scale), 2)
+
+
+def bilingual_html(original: str, translated, body_pt, scale, family: str = "") -> str:
+    """双语面板内容：原文用正文字号，译文用 正文×倍数；行高随字号自适应（QTextEdit 富文本）。"""
+    from html import escape
+    fam = f"font-family:'{escape(family, quote=True)}';" if family else ""
+    tp = translation_point_size(body_pt, scale)
+    try:
+        bp = float(body_pt)
+    except (TypeError, ValueError):
+        bp = 15.0
+    t = "（翻译中…）" if translated is None else escape(translated)
+    return (f'<div style="{fam}font-size:{bp:g}pt;">原文：{escape(original)}</div>'
+            f'<div style="{fam}font-size:{tp:g}pt;margin-top:0.6em;">译文：{t}</div>')
+
+
 DEFAULT_CONFIG = {"font_family": "", "font_size": 15,
                   "line_spacing": 1.5, "margin_x": 28.0, "margin_y": 44.0,
                   "outer": 16.0, "gutter": 36.0, "para_spacing": 0.6,
@@ -241,6 +278,8 @@ DEFAULT_CONFIG = {"font_family": "", "font_size": 15,
                   "azure_tts_key2": "", "azure_tts_region2": "",
                   "theme": DEFAULT_THEME, "recent": [], "library_dirs": [],
                   "bilingual": False, "bilingual_target": "中文",
+                  # 双语面板里译文字号 = 正文字号 × 该倍数（默认 1.1，不小于正文；范围见 TRANS_SCALE_MIN/MAX）
+                  "translation_font_scale": 1.1,
                   "flip_effect": DEFAULT_FLIP_EFFECT,
                   "single_page": False,
                   # WebDAV 进度同步（默认关闭；这些键只存本机 config.json，绝不上传）
