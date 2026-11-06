@@ -2,7 +2,7 @@
 // Only requests under this worker's own directory are handled. Everything else (cross-origin WebDAV, or a WebDAV
 // server on the SAME origin: /library, /users, ...) is never touched, so authenticated responses and progress JSON
 // are never cached or served stale. Bump CACHE when shipping a new version.
-const CACHE = 'pyreader-web-v6';
+const CACHE = 'pyreader-web-v7';
 const SCOPE_PATH = new URL('./', self.location).pathname;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
@@ -10,12 +10,12 @@ const SHELL = [
   'js/app.js', 'js/library.js',
   'js/core/anchor.js', 'js/core/bookid.js', 'js/core/chapters.js', 'js/core/names.js', 'js/core/progress.js', 'js/core/sha1.js',
   'js/core/recent.js', 'js/core/shelfmerge.js', 'js/core/textenc.js',
-  'js/parse/epub.js', 'js/parse/pdf.js', 'js/parse/sanitize.js', 'js/parse/textbooks.js', 'js/parse/txt.worker.js', 'js/parse/txtparse.js',
-  'js/reader/paginator.js', 'js/reader/reader.js', 'js/reader/tts.js', 'js/reader/translate.js',
+  'js/parse/epub.js', 'js/parse/mobi.js', 'js/parse/mobicheck.js', 'js/parse/pdf.js', 'js/parse/sanitize.js', 'js/parse/textbooks.js', 'js/parse/txt.worker.js', 'js/parse/txtparse.js',
+  'js/reader/paginator.js', 'js/reader/reader.js', 'js/reader/tts.js',
   'js/store/db.js', 'js/store/settings.js',
   'js/sync/manager.js', 'js/sync/propfind.js', 'js/sync/sync.js', 'js/sync/webdav.js',
   'js/ui/dom.js', 'js/ui/icons.js', 'js/ui/settings.js', 'js/ui/shelf.js',
-  'vendor/jszip.min.js', 'vendor/marked.esm.js',
+  'vendor/jszip.min.js', 'vendor/marked.esm.js', 'vendor/foliate-mobi.js',
 ];
 
 self.addEventListener('install', (e) => {

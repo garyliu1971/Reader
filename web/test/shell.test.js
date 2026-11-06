@@ -27,7 +27,7 @@ test('manifest icons exist and index.html assets resolve', () => {
 
 test('vendored libraries have recorded versions and licenses', () => {
   const readme = readFileSync(join(web, 'vendor', 'README.md'), 'utf8');
-  for (const f of ['jszip.min.js', 'marked.esm.js', 'pdf.min.js', 'pdf.worker.min.js', 'LICENSE.jszip', 'LICENSE.marked', 'LICENSE.pdfjs']) {
+  for (const f of ['jszip.min.js', 'marked.esm.js', 'pdf.min.js', 'pdf.worker.min.js', 'LICENSE.jszip', 'LICENSE.marked', 'LICENSE.pdfjs', 'foliate-mobi.js', 'LICENSE.foliate']) {
     assert.ok(existsSync(join(web, 'vendor', f)), f);
     assert.ok(readme.includes(f), `${f} not documented in vendor/README.md`);
   }

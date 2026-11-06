@@ -51,7 +51,7 @@ export function isHiddenName(name) {
   return name.startsWith('.') || name.startsWith('~$');
 }
 
-export const BOOK_EXTS_READABLE = ['.txt', '.md', '.markdown', '.epub', '.html', '.htm', '.pdf'];
+export const BOOK_EXTS_READABLE = ['.txt', '.md', '.markdown', '.epub', '.mobi', '.azw', '.azw3', '.prc', '.html', '.htm', '.pdf'];
 
 /** Lower-cased extension including the dot ('' if none). */
 export function extOf(name) {

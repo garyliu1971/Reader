@@ -5,8 +5,9 @@ import { extOf } from './core/names.js';
 import { openEpub } from './parse/epub.js';
 import { parseTxtAsync, txtBook, richTextBook } from './parse/textbooks.js';
 import { openPdf } from './parse/pdf.js';
+import { openMobi } from './parse/mobi.js';
 
-export const FORMATS = { '.txt': 'txt', '.md': 'md', '.markdown': 'md', '.epub': 'epub', '.pdf': 'pdf', '.html': 'html', '.htm': 'html' };
+export const FORMATS = { '.txt': 'txt', '.md': 'md', '.markdown': 'md', '.epub': 'epub', '.mobi': 'mobi', '.azw': 'mobi', '.azw3': 'mobi', '.prc': 'mobi', '.pdf': 'pdf', '.html': 'html', '.htm': 'html' };
 export const ACCEPT = Object.keys(FORMATS).join(',');
 export const MAX_IMPORT_BYTES = 300 * 1024 * 1024;
 
@@ -38,7 +39,7 @@ export async function allBooks() { return db.getAll('books'); }
  */
 export async function importBlob(file, { name = file.name, remote = null, onStatus = () => {} } = {}) {
   const format = formatOf(name);
-  if (!format) throw new Error(`暂不支持 ${extOf(name) || '该'} 格式（支持 EPUB、TXT、Markdown、HTML、PDF）`);
+  if (!format) throw new Error(`暂不支持 ${extOf(name) || '该'} 格式（支持 EPUB、MOBI/AZW3、TXT、Markdown、HTML、PDF）`);
   if (file.size > MAX_IMPORT_BYTES) throw new Error(`文件过大（${Math.round(file.size / 1048576)} MB，上限 ${MAX_IMPORT_BYTES / 1048576} MB）`);
   if (file.size === 0) throw new Error('文件是空的');
   const id = remote ? remoteBookId(remote.rel) : localBookId(name, file.size);
@@ -52,11 +53,13 @@ export async function importBlob(file, { name = file.name, remote = null, onStat
   };
   let coverBlob = null;
   onStatus(`解析 ${name}…`);
-  if (format === 'epub') {
-    const book = await openEpub(file);
-    await book.scan((f) => onStatus(`解析 ${name}… ${Math.round(f * 100)}%`));
+  if (format === 'epub' || format === 'mobi') {
+    const book = await (format === 'mobi' ? openMobi : openEpub)(file);
+    try {
+      await book.scan((f) => onStatus(`解析 ${name}… ${Math.round(f * 100)}%`));
+    } catch (e) { book.close(); throw e; }
     meta.lens = book.lens;
-    Object.assign(meta, book.layoutData());   // docLens, headings, parts: lets us open without rescanning
+    Object.assign(meta, book.layoutData());   // docLens, headings, parts (mobi: + keep, tocRaw): lets us open without rescanning
     if (book.title) meta.title = book.title;
     meta.author = book.author;
     try { const c = await book.cover(); if (c) coverBlob = await makeThumb(c); } catch { /* generated tile instead */ }
@@ -92,10 +95,12 @@ export async function openStored(id) {
   if (!meta || !row) throw new Error('本地没有这本书的文件（可能已被清理），请重新导入或从云端下载');
   const blob = row.blob;
   let book;
-  if (meta.format === 'epub') {
-    book = await openEpub(blob);
-    if (meta.docLens && meta.docLens.length === book.docs.length) book.layout(meta.docLens, meta.headings, meta.parts);
-    else {   // imported by an older build / changed file: rescan once
+  if (meta.format === 'epub' || meta.format === 'mobi') {
+    const isMobi = meta.format === 'mobi';
+    book = await (isMobi ? openMobi : openEpub)(blob);
+    if (meta.docLens && meta.docLens.length === book.docs.length && (!isMobi || (meta.keep && meta.tocRaw))) {
+      book.layout(meta.docLens, meta.headings, meta.parts, isMobi ? { keep: meta.keep, tocRaw: meta.tocRaw } : undefined);
+    } else {   // imported by an older build / changed file: rescan once
       await book.scan();
       meta.lens = book.lens;
       Object.assign(meta, book.layoutData());

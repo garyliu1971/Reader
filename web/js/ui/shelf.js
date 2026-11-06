@@ -99,7 +99,7 @@ export class ShelfView {
         if (have.has(id)) continue;
         const d = digest[id];
         out.push({
-          id, title: stemOf(baseName(f.rel)), author: '', format: (f.rel.split('.').pop() || '').toLowerCase().replace('markdown', 'md').replace('htm', 'html'), size: f.size,
+          id, title: stemOf(baseName(f.rel)), author: '', format: formatOf(f.rel) || (f.rel.split('.').pop() || '').toLowerCase(), size: f.size,
           percent: d ? d.percent : 0, remoteNote: d ? `${d.device} 读到 ${d.percent.toFixed(1)}%` : '', cloud: true, uploading: unstable.has(f.rel),
           lastRead: d ? d.updated * 1000 : 0, touched: d ? d.updated * 1000 : 0, addedAt: (f.mtime || 0) * 1000, rel: f.rel, source: 'remote', mtime: f.mtime,
           fav: !!fieldValue(merged, id, 'fav', false), hidden: !!fieldValue(merged, id, 'hidden', false),
@@ -150,7 +150,7 @@ export class ShelfView {
     this.renderContinue(entries);
     if (!entries.length) {
       this.grid.replaceChildren(h('div', { class: 'empty', style: 'grid-column:1/-1' },
-        h('p', null, '书架是空的。'), h('p', null, '点右上角“导入”，或把 EPUB / TXT / Markdown / HTML / PDF 文件拖到这个页面。'),
+        h('p', null, '书架是空的。'), h('p', null, '点右上角“导入”，或把 EPUB / MOBI / AZW3 / TXT / Markdown / HTML / PDF 文件拖到这个页面。'),
         h('p', { class: 'hint', text: '也可以在设置里连接 WebDAV，与桌面版 PyReader 共享书库和阅读进度。' })));
       return;
     }
@@ -298,7 +298,7 @@ export class ShelfView {
     const t = toast('正在导入…', { ms: 600000 });
     const label = t.firstChild;
     for (const f of files) {
-      if (!formatOf(f.name)) { toast(`跳过 ${f.name}：暂不支持该格式（支持 EPUB、TXT、MD、HTML、PDF）`, { ms: 5000 }); continue; }
+      if (!formatOf(f.name)) { toast(`跳过 ${f.name}：暂不支持该格式（支持 EPUB、MOBI/AZW3、TXT、MD、HTML、PDF）`, { ms: 5000 }); continue; }
       try {
         const r = await importBlob(f, { onStatus: (m) => { label.textContent = m; } });
         if (r.duplicate) dup++; else ok++;
