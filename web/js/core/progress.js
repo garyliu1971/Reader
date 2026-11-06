@@ -6,7 +6,14 @@ export const FUTURE_LIMIT_S = 24 * 3600;
 
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 
-export function makeRecord({ bid, offset = 0, percent, chapter = '', updated, device }) {
+/**
+ * `offset` is a code-point index into the *desktop app's own* extracted text, which the web reader cannot know.
+ * The desktop (sync.resolve_offset) trusts any 0 <= offset < text_len, so writing 0 would send it to the start of the
+ * book. We therefore write an out-of-range value on purpose: the desktop then falls back to `percent`.
+ */
+export const OFFSET_UNKNOWN = 1_000_000_000_000;
+
+export function makeRecord({ bid, offset = OFFSET_UNKNOWN, percent, chapter = '', updated, device }) {
   return {
     book_id: bid,
     offset: Math.max(0, Math.trunc(offset) || 0),

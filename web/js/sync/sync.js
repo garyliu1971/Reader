@@ -67,16 +67,22 @@ export class SyncEngine {
     this.cfg = cfg;
     this.kv = kv;
     this.now = now;
-    this.client = new DavClient({ baseUrl: cfg.url, user: cfg.user, password: cfg.password, fetchImpl });
+    // no URL configured = local-only mode: favourites/hidden/progress digest still work offline, nothing touches the network
+    this._client = cfg.url ? new DavClient({ baseUrl: cfg.url, user: cfg.user, password: cfg.password, fetchImpl }) : null;
     this.own = null;        // own overlay (view form)
     this.peers = {};        // dev -> {view, cursor}
     this.state = { pushedKey: null, ownStamp: null, rounds: 0 };
     this.ready = false;
   }
 
+  get client() {
+    if (!this._client) throw new DavError('未配置同步服务器');
+    return this._client;
+  }
+
   get user() { return this.cfg.syncUser; }
   get deviceId() { return this.cfg.deviceId; }
-  skewMs() { return this.client.skewMs || 0; }
+  skewMs() { return (this._client && this._client.skewMs) || 0; }
 
   async init() {
     const ns = `sync.${this.deviceId}.`;
@@ -283,7 +289,7 @@ export class SyncEngine {
    * Write a per-book progress file. Reads the remote one first and never regresses a newer record.
    * @returns {{status:'written'|'remote-newer'|'error', remote?:object, message?:string}}
    */
-  async pushBookProgress({ bid, percent, offset = 0, chapter = '', updated = null }) {
+  async pushBookProgress({ bid, percent, offset = undefined, chapter = '', updated = null }) {
     if (!validBookId(bid)) return { status: 'error', message: 'bad book id' };
     const stamp = updated ?? stampNow(this.now(), this.skewMs());
     try {

@@ -1,0 +1,647 @@
+// Reader view: toolbar, drawers (TOC / bookmarks / search / settings), gestures, progress saving.
+// The text layout itself lives in paginator.js; positions are {s, o, f, c} anchors (see core/anchor.js).
+import { h, openPanel, toast, debounce, sleep } from '../ui/dom.js';
+import { icon } from '../ui/icons.js';
+import { Paginator } from './paginator.js';
+import { openStored, touchOpened, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
+import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
+import { stampNow } from '../core/progress.js';
+import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
+
+const TAP_ZONE = 0.3;
+const THEMES = [['auto', '跟随系统'], ['light', '明亮'], ['dark', '夜间'], ['sepia', '护眼黄'], ['eye', '护眼绿']];
+const FONTS = [['serif', '宋体'], ['sans', '黑体'], ['kai', '楷体'], ['system', '系统']];
+
+const isDarkNow = () => {
+  const t = document.documentElement.getAttribute('data-theme');
+  return t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches);
+};
+
+export class ReaderView {
+  /**
+   * @param root container element
+   * @param ctx {goShelf(), onProgress(info), fetchRemoteProgress(bid), now()}
+   */
+  constructor(root, ctx) {
+    this.root = root;
+    this.ctx = ctx;
+    this.meta = null;
+    this.book = null;
+    this.s = 0;
+    this.seq = 0;
+    this.seq2 = 0;
+    this.quiet = false;
+    this.active = false;
+    this.dirty = false;
+    this.settings = null;
+    this.lastSaved = null;
+    this.searchCache = new Map();
+    this.build();
+    this.saveSoon = debounce(() => this.saveNow(), 700);
+  }
+
+  // ------------------------------------------------------------------ DOM
+  build() {
+    const r = this.root;
+    r.replaceChildren();
+    this.titleEl = h('div', { class: 'title' });
+    this.btnToc = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '目录和书签', onclick: () => this.openToc('toc') }, icon('menu'));
+    this.btnSearch = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '搜索全文', onclick: () => this.openSearch() }, icon('search'));
+    this.btnMark = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '添加书签', 'aria-pressed': 'false', onclick: () => this.toggleBookmark() }, icon('bookmark'));
+    this.btnSet = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '阅读设置', onclick: () => this.openSettings() }, icon('font'));
+    this.topbar = h('header', { class: 'topbar' },
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': '返回书架', onclick: () => this.ctx.goShelf() }, icon('back')),
+      this.titleEl, this.btnToc, this.btnSearch, this.btnMark, this.btnSet);
+    this.content = h('div', { class: 'content', lang: 'zh-CN' });
+    this.scrollNav = h('div', { class: 'scroll-nav row' },
+      h('button', { class: 'btn', type: 'button', onclick: () => this.chapter(-1) }, '上一章'),
+      h('button', { class: 'btn', type: 'button', onclick: () => this.chapter(1) }, '下一章'));
+    this.frame = h('div', { class: 'frame', tabIndex: -1, 'aria-label': '正文' }, this.content, this.scrollNav);
+    this.stage = h('div', { class: 'stage', id: 'main' }, this.frame);
+    this.chEl = h('span', { class: 'ch' });
+    this.posEl = h('span', { class: 'pos' });
+    this.status = h('div', { class: 'statusline', 'aria-hidden': 'true' }, this.chEl, this.posEl);
+    this.slider = h('input', { type: 'range', min: '0', max: '1000', step: '1', value: '0', 'aria-label': '跳转到阅读百分比' });
+    this.pctLabel = h('span', { class: 'pctlabel', 'aria-live': 'off' }, '0%');
+    this.bottom = h('div', { class: 'bottombar' }, h('div', { class: 'line' },
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': '上一章', onclick: () => this.chapter(-1) }, icon('prev')),
+      this.slider, this.pctLabel,
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': '下一章', onclick: () => this.chapter(1) }, icon('next'))));
+    this.loading = h('div', { class: 'loading', role: 'status' }, '正在打开…');
+    r.append(this.stage, this.status, this.topbar, this.bottom, this.loading);
+
+    this.pg = new Paginator(this.frame, this.content);
+    this.pg.onChange = (reason) => this.onPaginator(reason);
+    this.slider.addEventListener('input', () => { this.pctLabel.textContent = (this.slider.value / 10).toFixed(1) + '%'; });
+    this.slider.addEventListener('change', () => this.seekPercent(this.slider.value / 10));
+    this.bindInput();
+  }
+
+  // ------------------------------------------------------------------ input
+  bindInput() {
+    const f = this.frame;
+    const ptrs = new Map();
+    let down = null;
+    let pinch = null;
+    f.addEventListener('pointerdown', (e) => {
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (ptrs.size === 2) {
+        const [a, b] = [...ptrs.values()];
+        pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), size0: this.settings.fontSize, ratio: 1 };
+        down = null;
+      } else if (ptrs.size === 1) down = { x: e.clientX, y: e.clientY, t: performance.now(), type: e.pointerType, target: e.target };
+    });
+    f.addEventListener('pointermove', (e) => {
+      if (!ptrs.has(e.pointerId)) return;
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && ptrs.size >= 2) {
+        const [a, b] = [...ptrs.values()];
+        pinch.ratio = Math.hypot(a.x - b.x, a.y - b.y) / (pinch.d0 || 1);
+      }
+    });
+    const end = (e) => {
+      if (!ptrs.has(e.pointerId)) return;
+      ptrs.delete(e.pointerId);
+      if (pinch) {
+        if (ptrs.size === 0) {   // apply once when the gesture ends: live re-layout during a pinch would thrash
+          if (Math.abs(pinch.ratio - 1) > 0.06) this.setSetting('fontSize', Math.round(pinch.size0 * pinch.ratio));
+          pinch = null;
+        }
+        return;
+      }
+      if (!down || e.type === 'pointercancel') { down = null; return; }
+      const d = down;
+      down = null;
+      const dx = e.clientX - d.x, dy = e.clientY - d.y;
+      const sel = window.getSelection && window.getSelection().toString();
+      if (sel) return;   // text is being selected/copied: never treat it as a tap
+      if (d.target && d.target.closest && d.target.closest('a')) return;
+      if (d.type !== 'mouse' && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.5 && this.pg.mode === 'paged') {
+        dx < 0 ? this.next() : this.prev();   // swipe (touch/pen only: a mouse drag is a text selection)
+        return;
+      }
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) return;
+      const rect = f.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      if (this.barsOn()) { this.setBars(false); return; }
+      if (x < TAP_ZONE) this.prev();
+      else if (x > 1 - TAP_ZONE) this.next();
+      else this.setBars(true);
+    };
+    f.addEventListener('pointerup', end);
+    f.addEventListener('pointercancel', end);
+    f.addEventListener('click', (e) => {
+      const a = e.target.closest && e.target.closest('a[data-href]');
+      if (a) { e.preventDefault(); this.followLink(a.getAttribute('data-href')); }
+    });
+    let wheelAt = 0;
+    f.addEventListener('wheel', (e) => {
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.setSetting('fontSize', this.settings.fontSize + (e.deltaY < 0 ? 1 : -1)); return; }
+      if (this.pg.mode !== 'paged' && !this.pdf) return;
+      if (Math.abs(e.deltaY) < 4 && Math.abs(e.deltaX) < 4) return;
+      e.preventDefault();
+      const now = performance.now();
+      if (now - wheelAt < 280) return;
+      wheelAt = now;
+      (e.deltaY + e.deltaX > 0) ? this.next() : this.prev();
+    }, { passive: false });
+    f.addEventListener('scroll', () => { if (this.pg.mode === 'scroll') this.onScroll(); }, { passive: true });
+
+    this.keyHandler = (e) => {
+      if (!this.active) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && ['+', '=', '-', '_', '0'].includes(e.key)) {
+        e.preventDefault();
+        if (e.key === '0') this.setSetting('fontSize', 19);
+        else this.setSetting('fontSize', this.settings.fontSize + (e.key === '-' || e.key === '_' ? -1 : 1));
+        return;
+      }
+      if (document.querySelector('.overlay-root:not(.side-sheet)') || mod || e.altKey) return;
+      switch (e.key) {
+        case 'ArrowRight': case 'ArrowDown': case 'PageDown': this.next(); break;
+        case 'ArrowLeft': case 'ArrowUp': case 'PageUp': this.prev(); break;
+        case ' ': e.shiftKey ? this.prev() : this.next(); break;
+        case 'Home': this.seekPercent(0); break;
+        case 'End': this.seekPercent(100); break;
+        case 'Escape': if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
+        case 't': case 'T': this.openToc('toc'); break;
+        case 'b': case 'B': this.toggleBookmark(); break;
+        case '/': e.preventDefault(); this.openSearch(); break;
+        case 'm': case 'M': this.setBars(!this.barsOn()); break;
+        default: return;
+      }
+      e.preventDefault();
+    };
+    document.addEventListener('keydown', this.keyHandler);
+    this.vis = () => { if (document.visibilityState === 'hidden' && this.active) this.saveSoon.flush(); };
+    document.addEventListener('visibilitychange', this.vis);
+    window.addEventListener('pagehide', this.vis);
+  }
+
+  barsOn() { return this.root.classList.contains('bars-on'); }
+  setBars(on) { this.root.classList.toggle('bars-on', on); }
+
+  // ------------------------------------------------------------------ opening
+  async open(id) {
+    const seq = ++this.seq;
+    this.active = true;
+    this.loading.hidden = false;
+    this.loading.textContent = '正在打开…';
+    this.setBars(false);
+    this.closeBook();
+    try {
+      this.settings = await loadSettings();
+      this.applySettings(false);
+      const { meta, book } = await openStored(id);
+      if (seq !== this.seq) { book.close(); return; }
+      this.meta = meta;
+      this.book = book;
+      this.pdf = book.format === 'pdf';
+      this.titleEl.textContent = meta.title;
+      document.title = `${meta.title} - PyReader Web`;
+      this.frame.classList.toggle('pdf', this.pdf);
+      this.scrollNav.hidden = this.pdf;
+      if (!this.pdf && this.pg.mode !== this.settings.mode) this.pg.setMode(this.settings.mode);
+      this.content.hidden = this.pdf;
+      this.btnSearch.disabled = this.pdf;
+      this.btnSearch.title = this.pdf ? 'PDF 暂不支持全文搜索' : '';
+      this.searchCache.clear();
+      const saved = await getProgress(id);
+      this.lastSaved = saved || null;
+      this.dirty = false;
+      this.pg.observe();
+      this.quiet = true;
+      if (this.pdf) await this.openPdfAt(saved && saved.anchor ? saved.anchor.s : 0);
+      else {
+        const a = saved && saved.anchor;
+        const s = a && a.s < book.sections.length ? a.s : 0;
+        await this.showSection(s, a && a.s === s ? { anchor: a } : { start: true });
+      }
+      this.quiet = false;
+      if (seq !== this.seq) return;
+      this.loading.hidden = true;
+      this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
+      touchOpened(meta).catch(() => {});
+      this.checkRemote(saved);
+      this.refreshMarkButton();
+    } catch (e) {
+      console.error(e);
+      this.loading.textContent = '打开失败：' + (e && e.message ? e.message : e);
+      this.loading.append(h('div', { class: 'row', style: 'margin-left:12px' }, h('button', { class: 'btn', type: 'button', onclick: () => this.ctx.goShelf() }, '返回书架')));
+    }
+  }
+
+  closeBook() {
+    if (this.book) { try { this.book.close(); } catch { /* ignore */ } }
+    this.book = null;
+    this.content.replaceChildren();
+    if (this.pdfCanvas) { this.pdfCanvas.remove(); this.pdfCanvas = null; }
+  }
+
+  close() {
+    this.saveSoon.flush();
+    this.active = false;
+    this.seq++;
+    this.pg.disconnect();
+    this.closeBook();
+    document.title = 'PyReader Web';
+  }
+
+  // ------------------------------------------------------------------ settings
+  applySettings(relayout = true) {
+    const s = this.settings;
+    applyTheme(s.theme);
+    applyTypography(this.root, s);
+    this.pg.animate = true;
+    if (this.book && !this.pdf && this.pg.mode !== s.mode) this.pg.setMode(s.mode);
+    if (this.pdfCanvas) this.pdfCanvas.classList.toggle('invert', isDarkNow());
+    if (relayout && this.book) { if (this.pdf) this.renderPdf(); else this.pg.relayoutNow(); }
+  }
+
+  setSetting(key, value) {
+    if (key in LIMITS) value = Math.min(LIMITS[key][1], Math.max(LIMITS[key][0], value));
+    this.settings = normalize({ ...this.settings, [key]: value });
+    saveSettings(this.settings).catch(() => {});
+    if (key === 'fontSize') toast(`字号 ${this.settings.fontSize}`, { ms: 900 });
+    this.applySettings(true);
+    if (this.settingsSync) this.settingsSync();
+  }
+
+  openSettings() {
+    const s = () => this.settings;
+    const seg = (items, key) => {
+      const wrap = h('div', { class: 'seg', role: 'group' });
+      const upd = () => wrap.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(String(s()[key]) === b.dataset.v)));
+      items.forEach(([v, label]) => wrap.append(h('button', { type: 'button', dataset: { v: String(v) }, onclick: () => { this.setSetting(key, v); upd(); } }, label)));
+      upd();
+      return { wrap, upd };
+    };
+    const range = (label, key, step, fmt = (v) => v) => {
+      const out = h('span', { class: 'pct' });
+      const inp = h('input', { type: 'range', min: LIMITS[key][0], max: LIMITS[key][1], step, value: s()[key], 'aria-label': label });
+      const upd = () => { inp.value = s()[key]; out.textContent = fmt(s()[key]); };
+      inp.addEventListener('input', () => { this.setSetting(key, parseFloat(inp.value)); upd(); });
+      upd();
+      return { el: h('label', { class: 'field' }, h('span', null, label, ' ', out), inp), upd };
+    };
+    const toggle = (label, key) => {
+      const b = h('button', { class: 'chip', type: 'button', 'aria-pressed': String(!!s()[key]), onclick: () => { this.setSetting(key, !s()[key]); b.setAttribute('aria-pressed', String(!!s()[key])); } }, label);
+      return b;
+    };
+    const theme = seg(THEMES, 'theme');
+    const fam = seg(FONTS, 'fontFamily');
+    const fs = range('字号', 'fontSize', 1, (v) => v + 'px');
+    const lh = range('行距', 'lineHeight', 0.05, (v) => v.toFixed(2));
+    const mg = range('页边距', 'margin', 2, (v) => v + 'px');
+    const ps = range('段间距', 'paraSpace', 0.05, (v) => v.toFixed(2) + 'em');
+    const mode = seg([['paged', '分页'], ['scroll', '连续滚动']], 'mode');
+    const typo = [
+      h('label', { class: 'field' }, h('span', null, '字体'), fam.wrap), fs.el, lh.el, mg.el, ps.el,
+      h('div', { class: 'row' }, toggle('首行缩进', 'indent'), toggle('两端对齐', 'justify')),
+      h('label', { class: 'field' }, h('span', null, '翻页方式'), mode.wrap),
+    ];
+    const body = [h('label', { class: 'field' }, h('span', null, '主题'), theme.wrap),
+      ...(this.pdf ? [h('p', { class: 'hint', text: 'PDF 为固定版式，暂不支持字体/行距/边距设置（仅主题：夜间模式会反色显示）。' })] : typo),
+      h('p', { class: 'hint', text: '快捷键：Ctrl/⌘ + 加号/减号/0 调字号；左右方向键、PageUp/PageDown、空格翻页；T 目录；B 书签；/ 搜索；双指捏合也可调字号。' })];
+    this.settingsSync = () => { theme.upd(); fam.upd(); fs.upd(); lh.upd(); mg.upd(); ps.upd(); mode.upd(); };
+    const p = openPanel({ title: '阅读设置', side: 'sheet', content: body, onClose: () => { this.settingsSync = null; } });
+    return p;
+  }
+
+  // ------------------------------------------------------------------ text navigation
+  async showSection(i, where = { start: true }) {
+    const seq = ++this.seq2;
+    const { frag, cleanup } = await this.book.loadSection(i);
+    if (seq !== this.seq2) { cleanup(); return; }
+    this.s = i;
+    this.clearHighlight();
+    await this.pg.setContent(frag, cleanup);
+    if (seq !== this.seq2) return;
+    if (where.anchor) this.pg.gotoOffset(resolveOffset(where.anchor, this.pg.fullText()));
+    else if (where.offset !== undefined) this.pg.gotoOffset(where.offset);
+    else if (where.fraction !== undefined) this.pg.gotoOffset(this.pg.skipBlank(Math.round(where.fraction * this.pg.total)));
+    else if (where.id) { if (!this.pg.gotoId(where.id)) this.pg.gotoOffset(0); }
+    else if (where.end) this.pg.gotoEnd();
+    else this.pg.gotoOffset(0);
+    this.updateUi();
+  }
+
+  async next() {
+    if (!this.book) return;
+    if (this.pdf) { if (this.pdfPage < this.book.pageCount - 1) await this.setPdfPage(this.pdfPage + 1, true); return; }
+    if (this.pg.next() === 'end') {
+      if (this.s < this.book.sections.length - 1) { await this.showSection(this.s + 1, { start: true }); this.markDirty(); }
+      else toast('已是最后一页', { ms: 900 });
+    }
+  }
+
+  async prev() {
+    if (!this.book) return;
+    if (this.pdf) { if (this.pdfPage > 0) await this.setPdfPage(this.pdfPage - 1, true); return; }
+    if (this.pg.prev() === 'start') {
+      if (this.s > 0) { await this.showSection(this.s - 1, { end: true }); this.markDirty(); }
+      else toast('已是第一页', { ms: 900 });
+    }
+  }
+
+  tocSections() {
+    const set = new Set(this.book.toc.map((t) => t.s));
+    return set.size ? [...set].sort((a, b) => a - b) : this.book.sections.map((_, i) => i);
+  }
+
+  async chapter(dir) {
+    if (!this.book) return;
+    if (this.pdf) {
+      const t = this.book.toc.length ? [...new Set(this.book.toc.map((x) => x.s))].sort((a, b) => a - b) : null;
+      const cur = this.pdfPage;
+      const target = t ? (dir > 0 ? t.find((x) => x > cur) : [...t].reverse().find((x) => x < cur)) : cur + dir * 10;
+      if (target !== undefined) await this.setPdfPage(Math.max(0, Math.min(this.book.pageCount - 1, target)), true);
+      return;
+    }
+    const list = this.tocSections();
+    let target;
+    if (dir > 0) target = list.find((x) => x > this.s);
+    else target = this.pg.page > 0 || this.pg.anchor > 0 ? [...list].reverse().find((x) => x <= this.s) : [...list].reverse().find((x) => x < this.s);
+    if (target === undefined) { toast(dir > 0 ? '已是最后一章' : '已是第一章', { ms: 900 }); return; }
+    await this.showSection(target, { start: true });
+    this.markDirty();
+  }
+
+  async seekPercent(p) {
+    if (!this.book) return;
+    if (this.pdf) { await this.setPdfPage(Math.min(this.book.pageCount - 1, Math.max(0, Math.round((p / 100) * this.book.pageCount - 0.5))), true); return; }
+    const { s, f } = percentToPosition(this.book.lens, p);
+    if (s !== this.s) await this.showSection(s, { fraction: f });
+    else this.pg.gotoOffset(this.pg.skipBlank(Math.round(f * this.pg.total)));
+    this.markDirty();
+    this.updateUi();
+  }
+
+  async gotoTarget(s, where) {
+    if (this.pdf) { await this.setPdfPage(s, true); return; }
+    if (s === this.s) {
+      if (where.anchor) this.pg.gotoOffset(resolveOffset(where.anchor, this.pg.fullText()));
+      else if (where.id) { if (!this.pg.gotoId(where.id)) this.pg.gotoOffset(0); }
+      else if (where.offset !== undefined) this.pg.gotoOffset(where.offset);
+      else this.pg.gotoOffset(0);
+      this.updateUi();
+    } else await this.showSection(s, where);
+    this.markDirty();
+  }
+
+  async followLink(href) {
+    if (!href) return;
+    const target = this.book.resolveHref(this.s, href);
+    if (target) { await this.gotoTarget(target.s, target.id ? { id: target.id } : { start: true }); return; }
+    if (/^(https?:|mailto:)/i.test(href)) {
+      const a = document.createElement('a');
+      a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.click();
+    }
+  }
+
+  onPaginator(reason) {
+    if (reason === 'page') { this.clearHighlight(); this.markDirty(); }
+    this.updateUi();
+  }
+
+  onScroll() {
+    if (this._scrollT) clearTimeout(this._scrollT);
+    this._scrollT = setTimeout(() => this.pg.syncAnchorFromScroll(), 120);
+  }
+
+  markDirty() { if (this.quiet) return; this.dirty = true; this.saveSoon(); }
+
+  // ------------------------------------------------------------------ position / percent
+  percent() {
+    if (!this.book) return 0;
+    if (this.pdf) return ((this.pdfPage + 1) / this.book.pageCount) * 100;
+    const pg = this.pg;
+    const last = this.s === this.book.sections.length - 1;
+    const atEnd = pg.mode === 'paged' ? pg.page >= pg.pageCount - 1 : pg.frame.scrollTop + pg.frame.clientHeight >= pg.frame.scrollHeight - 2;
+    const frac = last && atEnd ? 1 : pg.total ? pg.currentOffset() / pg.total : 0;
+    return positionToPercent(this.book.lens, this.s, frac);
+  }
+
+  anchor() {
+    if (this.pdf) return { s: this.pdfPage, o: 0, f: 0, c: '' };
+    const o = this.pg.currentOffset();
+    return { s: this.s, o, f: this.pg.total ? o / this.pg.total : 0, c: this.pg.textAt(o, 12) };
+  }
+
+  sectionTitle(s = this.s) {
+    if (!this.book) return '';
+    if (this.pdf) {
+      const t = [...this.book.toc].reverse().find((x) => x.s <= s);
+      return t ? t.title : '';
+    }
+    const t = this.curTocEntry();
+    return (t && t.title) || (this.book.sections[s] && this.book.sections[s].title) || '';
+  }
+
+  curTocEntry() {
+    let best = null;
+    for (const t of this.book.toc) if (t.s <= this.s) best = t; else break;
+    return best;
+  }
+
+  updateUi() {
+    if (!this.book) return;
+    const pct = this.percent();
+    const shown = Math.round(pct * 10) / 10;
+    this.slider.value = String(Math.round(pct * 10));
+    this.pctLabel.textContent = shown.toFixed(1) + '%';
+    this.chEl.textContent = this.sectionTitle();
+    this.posEl.textContent = this.pdf ? `第 ${this.pdfPage + 1}/${this.book.pageCount} 页 · ${shown.toFixed(1)}%`
+      : this.pg.mode === 'paged' ? `${this.pg.page + 1}/${this.pg.pageCount} · ${shown.toFixed(1)}%` : `${shown.toFixed(1)}%`;
+    this.refreshMarkButton();
+  }
+
+  // ------------------------------------------------------------------ progress persistence
+  async saveNow() {
+    if (!this.book || !this.meta || !this.dirty) return;
+    this.dirty = false;
+    const pct = this.percent();
+    const rec = { bid: this.meta.id, anchor: this.anchor(), percent: Math.round(pct * 1000) / 1000, updated: stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0), chapter: this.sectionTitle() };
+    this.lastSaved = rec;
+    try { await saveProgress(rec); } catch (e) { console.warn('[progress] save failed', e); }
+    this.ctx.onProgress({ bid: rec.bid, percent: rec.percent, chapter: rec.chapter, updated: rec.updated });
+  }
+
+  async checkRemote(saved) {
+    try {
+      const remote = await this.ctx.fetchRemoteProgress(this.meta.id);
+      if (!remote || !this.active || !this.meta) return;
+      const localTs = saved ? saved.updated : 0;
+      if (remote.updated <= localTs || Math.abs(remote.percent - this.percent()) < 0.5) return;
+      const jump = async () => {
+        banner.remove();
+        await this.seekPercent(remote.percent);
+        const rec = { bid: this.meta.id, anchor: this.anchor(), percent: remote.percent, updated: remote.updated, chapter: this.sectionTitle() };
+        this.lastSaved = rec;
+        await saveProgress(rec);   // adopt the remote timestamp: opening must not look like a newer local read
+        this.dirty = false;
+      };
+      const banner = h('div', { class: 'banner', role: 'alert' },
+        h('span', null, `「${remote.device || '其他设备'}」读到了 ${remote.percent.toFixed(1)}%`),
+        h('button', { class: 'btn small primary', type: 'button', onclick: jump }, '跳转'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => banner.remove() }, '忽略'));
+      if (!saved) { await jump(); toast(`已同步进度（来自 ${remote.device || '其他设备'}，${remote.percent.toFixed(1)}%）`); return; }
+      this.root.append(banner);
+      setTimeout(() => banner.remove(), 15000);
+    } catch (e) { console.warn('[sync] remote progress check failed', e); }
+  }
+
+  // ------------------------------------------------------------------ TOC / bookmarks
+  async openToc(tab = 'toc') {
+    const book = this.book;
+    if (!book) return;
+    let panelRef = null;
+    const body = h('div');
+    const render = async (which) => {
+      body.replaceChildren(h('div', { class: 'tabs', role: 'tablist' },
+        h('button', { type: 'button', role: 'tab', 'aria-selected': String(which === 'toc'), onclick: () => render('toc') }, '目录'),
+        h('button', { type: 'button', role: 'tab', 'aria-selected': String(which === 'mark'), onclick: () => render('mark') }, '书签')));
+      if (which === 'toc') {
+        const cur = this.pdf ? null : this.curTocEntry();
+        const ul = h('ul', { class: 'list' });
+        if (!book.toc.length) ul.append(h('li', null, h('p', { class: 'hint', text: this.pdf ? '这个 PDF 没有目录。' : '没有目录。' })));
+        let curIdx = -1;
+        if (this.pdf) { book.toc.forEach((t, i) => { if (t.s <= this.pdfPage) curIdx = i; }); } else if (cur) curIdx = book.toc.indexOf(cur);
+        book.toc.forEach((t, i) => {
+          const li = h('li', { 'aria-current': i === curIdx ? 'true' : null },
+            h('button', { type: 'button', style: `padding-left:${6 + Math.min(t.level, 4) * 16}px`, onclick: async () => { panelRef.close(); await this.gotoTarget(t.s, t.id ? { id: t.id } : { start: true }); } },
+              h('span', { text: t.title || `第 ${t.s + 1} 节` })));
+          ul.append(li);
+        });
+        body.append(ul);
+        setTimeout(() => { const c = ul.querySelector('[aria-current=true]'); if (c) c.scrollIntoView({ block: 'center' }); }, 40);
+      } else {
+        const marks = (await getBookmarks(this.meta.id)).sort((a, b) => a.percent - b.percent);
+        const ul = h('ul', { class: 'list' });
+        if (!marks.length) ul.append(h('li', null, h('p', { class: 'hint', text: '还没有书签。点顶栏的书签图标（或按 B）收藏当前页。' })));
+        for (const m of marks) {
+          ul.append(h('li', null, h('div', { class: 'li' },
+            h('button', { type: 'button', style: 'flex:1;padding:4px 0', onclick: async () => { panelRef.close(); await this.gotoTarget(m.anchor.s, this.pdf ? {} : { anchor: m.anchor }); } },
+              h('span', { class: 'snip' }, m.label || '（空白页）'),
+              h('span', { class: 'sub' }, `${m.chapter ? m.chapter + ' · ' : ''}${m.percent.toFixed(1)}% · ${new Date(m.ts).toLocaleString()}`)),
+            h('button', { class: 'icon-btn', type: 'button', 'aria-label': '删除书签', onclick: async () => { await deleteBookmark(m.id); await render('mark'); this.refreshMarkButton(); } }, icon('trash')))));
+        }
+        body.append(ul);
+      }
+    };
+    panelRef = openPanel({ title: book.title || this.meta.title, side: 'left', content: body, label: '目录和书签' });
+    await render(tab);
+  }
+
+  async curPageBookmark() {
+    if (!this.meta || !this.book) return null;
+    const marks = await getBookmarks(this.meta.id);
+    if (this.pdf) return marks.find((m) => m.anchor.s === this.pdfPage) || null;
+    const [a, b] = this.pg.pageRange();
+    return marks.find((m) => m.anchor.s === this.s && m.anchor.o >= a && m.anchor.o < Math.max(b, a + 1)) || null;
+  }
+
+  async refreshMarkButton() {
+    if (!this.book) return;
+    const seq = (this._markSeq = (this._markSeq || 0) + 1);
+    const cur = await this.curPageBookmark();
+    if (seq !== this._markSeq) return;
+    const on = !!cur;
+    this.btnMark.setAttribute('aria-pressed', String(on));
+    this.btnMark.setAttribute('aria-label', on ? '移除此页书签' : '添加书签');
+    this.btnMark.replaceChildren(icon(on ? 'bookmarkFill' : 'bookmark'));
+  }
+
+  async toggleBookmark() {
+    if (!this.book) return;
+    const cur = await this.curPageBookmark();
+    if (cur) { await deleteBookmark(cur.id); toast('已移除书签', { ms: 1200 }); } else {
+      const anchor = this.anchor();
+      const label = this.pdf ? `第 ${this.pdfPage + 1} 页` : this.pg.textAt(anchor.o, 36).trim();
+      await addBookmark({ bid: this.meta.id, anchor, label, chapter: this.sectionTitle(), percent: this.percent(), ts: Date.now() });
+      toast('已添加书签', { ms: 1200 });
+    }
+    this.refreshMarkButton();
+  }
+
+  // ------------------------------------------------------------------ search
+  openSearch() {
+    if (!this.book || this.pdf) return;
+    const input = h('input', { type: 'search', placeholder: '在全文中搜索…', 'aria-label': '搜索关键词', autofocus: true, enterKeyHint: 'search' });
+    const status = h('p', { class: 'hint' });
+    const list = h('ul', { class: 'list' });
+    let token = 0;
+    const run = async () => {
+      const q = input.value.trim();
+      const my = ++token;
+      list.replaceChildren();
+      if (!q) { status.textContent = ''; return; }
+      const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+      let hits = 0;
+      const MAX = 500;
+      const n = this.book.sections.length;
+      for (let i = 0; i < n && hits < MAX; i++) {
+        let t = this.searchCache.get(i);
+        if (t === undefined) { t = await this.book.sectionText(i); if (this.searchCache.size < 400) this.searchCache.set(i, t); }
+        if (my !== token) return;
+        re.lastIndex = 0;
+        let m;
+        const frag = document.createDocumentFragment();
+        while ((m = re.exec(t)) && hits < MAX) {
+          if (m[0].length === 0) { re.lastIndex++; continue; }
+          hits++;
+          const a = Math.max(0, m.index - 18);
+          const before = t.slice(a, m.index), after = t.slice(m.index + m[0].length, m.index + m[0].length + 28);
+          const o = m.index, len = m[0].length, secTitle = this.book.sections[i].title || '';
+          frag.append(h('li', null, h('button', { type: 'button', onclick: async () => { p.close(); await this.gotoTarget(i, { offset: o }); this.highlight(o, o + len); } },
+            h('span', { class: 'snip' }, (a > 0 ? '…' : '') + before, h('mark', null, m[0]), after),
+            h('span', { class: 'sub' }, `${secTitle.slice(0, 14)}`))));
+        }
+        list.append(frag);
+        status.textContent = `已搜索 ${i + 1}/${n} 章，找到 ${hits}${hits >= MAX ? '+' : ''} 处`;
+        if (i % 4 === 3) await sleep(0);
+      }
+      if (my === token) status.textContent = hits ? `共 ${hits}${hits >= MAX ? '+（仅显示前 500 条）' : ''} 处` : '没有找到';
+    };
+    const go = debounce(run, 250);
+    input.addEventListener('input', go);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { go.cancel(); run(); } });
+    const p = openPanel({ title: '搜索', side: 'left', content: [input, status, list], onClose: () => { token++; } });
+  }
+
+  highlight(a, b) {
+    const range = this.pg.rangeFor(a, b);
+    if (!range) return;
+    if (globalThis.CSS && CSS.highlights && globalThis.Highlight) CSS.highlights.set('search', new Highlight(range));
+    else { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+  }
+  clearHighlight() { if (globalThis.CSS && CSS.highlights) CSS.highlights.delete('search'); }
+
+  // ------------------------------------------------------------------ PDF (render-only)
+  async openPdfAt(page) {
+    this.pdfPage = Math.max(0, Math.min(this.book.pageCount - 1, page || 0));
+    this.pdfCanvas = h('canvas', { 'aria-label': 'PDF 页面', role: 'img' });
+    this.frame.append(this.pdfCanvas);
+    this.frame.classList.remove('scroll');
+    await this.renderPdf();
+    this.updateUi();
+    this._pdfRo = this._pdfRo || new ResizeObserver(() => { if (this.pdf && this.active) this.renderPdfSoon(); });
+    this._pdfRo.observe(this.frame);
+  }
+  renderPdfSoon() { clearTimeout(this._pdfT); this._pdfT = setTimeout(() => this.renderPdf(), 120); }
+  async renderPdf() {
+    if (!this.pdf || !this.pdfCanvas) return;
+    this.pdfCanvas.classList.toggle('invert', isDarkNow());
+    const w = this.frame.clientWidth - 8, hgt = this.frame.clientHeight - 8;
+    try { await this.book.render(this.pdfPage, this.pdfCanvas, Math.max(50, w), Math.max(50, hgt)); } catch (e) { toast('渲染失败：' + e.message); }
+  }
+  async setPdfPage(p, user) {
+    this.pdfPage = p;
+    await this.renderPdf();
+    if (user) this.markDirty();
+    this.updateUi();
+  }
+}

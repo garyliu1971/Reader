@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff">
+<meta name="description" content="PyReader Web：与桌面版 PyReader 共享书架与进度的轻量网页阅读器">
+<title>PyReader Web</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到内容</a>
+<div id="app">
+  <main id="shelf" class="view" aria-label="书架"></main>
+  <div id="reader" class="view reader" hidden aria-label="阅读器"></div>
+  <noscript><p style="padding:2em">PyReader Web 需要启用 JavaScript。</p></noscript>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

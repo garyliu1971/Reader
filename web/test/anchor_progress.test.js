@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset, cumulative } from '../js/core/anchor.js';
-import { mergeProgress, parseProgressBody, makeRecord, stampNow, decideRemote } from '../js/core/progress.js';
+import { mergeProgress, parseProgressBody, makeRecord, stampNow, decideRemote, OFFSET_UNKNOWN } from '../js/core/progress.js';
 
 const lens = [100, 0, 300, 600];   // includes an empty section
 
@@ -72,7 +72,7 @@ test('parseProgressBody validates book_id, numbers and the 24h future limit', ()
 test('makeRecord output has exactly the wire keys; stampNow uses server skew', () => {
   const r = makeRecord({ bid: 'remote:a', percent: 33.33333333, chapter: 'c', updated: 5, device: 'web' });
   assert.deepEqual(Object.keys(r).sort(), ['book_id', 'chapter', 'device', 'offset', 'percent', 'updated']);
-  assert.equal(r.offset, 0);
+  assert.equal(r.offset, OFFSET_UNKNOWN);   // out of range on purpose: the desktop then resolves by percent (0 would mean 'start of book')
   assert.equal(r.percent, 33.333);
   assert.equal(makeRecord({ bid: 'x', percent: 500, updated: 1, device: 'd' }).percent, 100);
   assert.equal(stampNow(1_000_000, 0), 1000);
