@@ -1,0 +1,6 @@
+{
+  "name": "pyreader-web",
+  "private": true,
+  "type": "module",
+  "description": "PyReader Web: static PWA companion reader (no build step). Tests: node --test web/test"
+}
