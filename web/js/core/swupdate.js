@@ -9,7 +9,7 @@
 
 export const MSG_PING = 'pyreader:ping';
 export const MSG_SKIP = 'pyreader:skip-waiting';
-export const PING_TIMEOUT_MS = 500;
+export const PING_TIMEOUT_MS = 2000;
 export const CHECK_MIN_GAP_MS = 5 * 60 * 1000;      // visibility/online triggered update() calls are throttled to this
 export const RELOAD_GUARD_MS = 10 * 1000;           // never reload twice within this (loop guard)
 

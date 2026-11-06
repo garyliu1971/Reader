@@ -1,6 +1,7 @@
 // Service worker update prompt. Real Chromium; serves several builds of the app from one port and swaps which one is
 // "deployed" while the page stays open. See lib.mjs for setup. Needs git (for the pre-prompt build) and tar.
-//   APP_URL=http://127.0.0.1:8133/index.html SMOKE_TMP=... node web/tools/browser-smoke/swupdate.mjs
+//   APP_URL=http://127.0.0.1:8133/reader/index.html SMOKE_TMP=... node web/tools/browser-smoke/swupdate.mjs
+// APP_URL must be in a sub-directory (like the real /reader/): the "other app on the same origin" case needs a page outside the scope.
 import { launch, SP, SHOTS, URL0, wait } from './lib.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -42,16 +43,26 @@ for (const n of ['v1', 'v2', 'v3']) build(n, WEB);
 legacyBuild('old');
 if (/swupdate/.test(fs.readFileSync(`${VER}/old/js/app.js`, 'utf8'))) { console.log('FAIL  legacy build already contains the prompt (merge-base wrong?)'); process.exit(1); }
 
+const BASE = new URL('./', URL0).pathname;   // e.g. /reader/
+if (BASE === '/') { console.log('FAIL  APP_URL must be in a sub-directory, e.g. http://127.0.0.1:8133/reader/index.html'); process.exit(1); }
 let current = 'v1';
+let slowShell = 0;   // ms to hold back css/app.css: makes a worker's install last long enough to load a page in the middle of it
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   let p = decodeURIComponent(u.pathname);
   if (p.endsWith('/')) p += 'index.html';
+  // a page of some OTHER app on the same origin (like the WebDAV host's web UI), outside the reader's scope
+  if (p === '/other/index.html') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end('<!doctype html><title>other</title><p>not the reader'); return; }
+  if (!p.startsWith(BASE)) { res.writeHead(404); res.end('nf'); return; }
+  p = p.slice(BASE.length - 1);
   const f = path.join(VER, current, p);
   if (!f.startsWith(path.join(VER, current)) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); res.end('nf'); return; }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
-  fs.createReadStream(f).pipe(res);
+  const send = () => {
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(f)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    fs.createReadStream(f).pipe(res);
+  };
+  if (slowShell && p.endsWith('/css/app.css')) setTimeout(send, slowShell); else send();
 });
 const port = Number(new URL(URL0).port);
 await new Promise((r) => server.listen(port, '127.0.0.1', r));
@@ -75,6 +86,10 @@ try {
   await wait(800);
   ok(await page.locator('.update-bar').count() === 0, 'first install: no update prompt');
   ok(await page.evaluate(() => caches.keys()).then((k) => k.join() === 'pyreader-web-v1'), 'cache of v1 only');
+  // an unrelated same-origin tab outside the app's scope must not count as a window that cannot show the prompt
+  const other = await context.newPage();
+  await other.goto(new URL('/other/index.html', URL0).href);
+  await page.bringToFront();
   const navCount = () => page.evaluate(() => performance.getEntriesByType('navigation').length + ':' + performance.timeOrigin);
   const origin0 = await navCount();
 
@@ -90,6 +105,28 @@ try {
   await wait(2500);
   ok(await page.evaluate(() => globalThis.__BUILD) === 'v1' && (await navCount()) === origin0, 'page not reloaded by itself; still running v1');
   ok(await page.evaluate(() => caches.keys()).then((k) => k.includes('pyreader-web-v1')), 'old cache generation still there while waiting (lazy imports stay consistent)');
+
+  // while v2 waits the old worker must keep serving v1 bytes: no revalidation write of the new deploy into its cache
+  const bytes = () => page.evaluate(async () => (await (await fetch('js/app.js')).text()).match(/__BUILD = '(\w+)'/)[1]);
+  const seen = [await bytes()]; await wait(700); seen.push(await bytes()); await wait(700); seen.push(await bytes());
+  ok(seen.every((b) => b === 'v1'), 'while a new worker waits, repeated loads of a module still return the running version', seen.join());
+
+  // narrow phone: the pill keeps its full width and stays on screen; in the reader it steps aside for the controls
+  await page.setViewportSize({ width: 360, height: 640 });
+  const bb = await page.locator('.update-bar').boundingBox();
+  ok(bb && bb.x >= 0 && bb.x + bb.width <= 360 && bb.height < 100, 'bar fits a 360px screen', JSON.stringify(bb));
+  const vis = (cls) => page.evaluate((c) => {
+    const r = document.getElementById('reader');
+    r.hidden = false; r.className = 'view reader ' + c;
+    const bar = document.querySelector('.update-bar'); const cs = getComputedStyle(bar);
+    const out = { v: cs.visibility, b: parseFloat(cs.bottom) };
+    r.hidden = true; r.className = 'view reader';
+    return out;
+  }, cls);
+  const rb = await vis('bars-on'); const rt = await vis('tts-on'); const rn = await vis('');
+  ok(rb.v === 'hidden' && rn.v === 'visible', 'reader controls shown: bar is hidden, not on top of them', JSON.stringify([rb, rn]));
+  ok(rt.b > rn.b + 60, 'read-aloud pill showing: bar sits above it', JSON.stringify([rt, rn]));
+  await page.setViewportSize({ width: 900, height: 700 });
 
   // dismiss: bar goes away, nothing else changes
   await page.locator('.update-bar button', { hasText: '稍后' }).click();
@@ -114,12 +151,15 @@ try {
   // The second tab is controlled by the still-active v1 worker, so it serves v1 and sees v3 waiting.
   ok(await until(() => page2.locator('.update-bar').count().then((n) => n === 1), 15000), 'a page opened while a worker is waiting shows the bar at once');
   await page2.evaluate(() => { window.__pyreader.reader.tts = { state: 'playing', stop() {} }; });
-  await page2.locator('.update-bar button', { hasText: '刷新' }).click();
+  await page2.evaluate(() => { const b = [...document.querySelectorAll('.update-bar button')].find((x) => x.textContent === '刷新'); b.click(); b.click(); b.click(); });   // impatient taps
   ok(await until(() => page2.locator('.panel', { hasText: '正在朗读' }).count().then((n) => n === 1), 5000), 'while reading aloud, 刷新 asks for confirmation first');
+  await wait(400);
+  ok(await page2.locator('.panel', { hasText: '正在朗读' }).count() === 1, 'repeated taps do not stack a second confirmation');
   await page2.screenshot({ path: SHOTS + '/swupdate-tts-confirm.png' });
   await page2.locator('.panel button', { hasText: '取消' }).click();
   await wait(1500);
   ok(await page2.evaluate(() => globalThis.__BUILD) === b2 && await page2.locator('.update-bar').count() === 1, 'cancelling keeps reading: no reload, bar still there');
+  ok(await page2.locator('.update-bar button', { hasText: '刷新' }).isEnabled(), 'cancelling re-enables 刷新');
   await page2.evaluate(() => { window.__pyreader.reader.tts = null; });
 
   // click for real: worker activates, page reloads into the new build, cache generations swapped
@@ -138,6 +178,25 @@ try {
   const real = logs.filter((l) => !/favicon|Failed to load resource/.test(l));
   ok(real.length === 0, 'no console errors/warnings', JSON.stringify(real));
   await context.close(); await browser.close();
+
+  // ============================================================ page opened while the new worker is ALREADY installing
+  current = 'v1';
+  const M = await launch({ width: 900, height: 700 });
+  const mp = M.page;
+  await mp.goto(URL0);
+  await mp.waitForSelector('.shelf-head');
+  ok(await until(() => mp.evaluate(() => !!navigator.serviceWorker.controller)), 'mid-install case: v1 controls the page');
+  await wait(800);
+  current = 'v2'; slowShell = 3000;                                           // deploy v2; its install now takes >3 s
+  await mp.reload();                                                          // the navigation-time update check starts the install
+  await mp.waitForSelector('.shelf-head');
+  ok(await until(() => mp.evaluate(() => globalThis.__BUILD)) === 'v1', 'reloaded page still runs v1 (v2 not active yet)');
+  ok(await until(() => mp.evaluate(async () => !!(await navigator.serviceWorker.getRegistration()).waiting), 20000), 'v2 finished installing in the background');
+  ok(await until(() => mp.locator('.update-bar').count().then((n) => n === 1), 8000), 'bar shows for a worker that was already installing when the page started (no later trigger needed)');
+  slowShell = 0;
+  const mreal = M.logs.filter((l) => !/favicon|Failed to load resource/.test(l));
+  ok(mreal.length === 0, 'no console errors in the mid-install case', JSON.stringify(mreal));
+  await M.context.close(); await M.browser.close();
 
   // ============================================================ old (pre-prompt) page + new worker, and the reverse
   current = 'old';

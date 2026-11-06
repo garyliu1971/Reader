@@ -64,3 +64,9 @@ test('sw.js keeps its safety invariants: own scope only, same-origin only, GET o
   assert.ok(!/PROPFIND|DELETE|MOVE/.test(sw));
   assert.match(sw, /self\.addEventListener\('message'/);
 });
+
+test('sw.js only pings app windows and never caches revalidated bytes while a newer worker is pending', () => {
+  const sw = readFileSync(join(here, '..', 'sw.js'), 'utf8');
+  assert.match(sw, /all\.filter\(\(w\) => \{ try \{ return new URL\(w\.url\)\.pathname\.startsWith\(SCOPE_PATH\)/);
+  assert.match(sw, /!self\.registration\.installing && !self\.registration\.waiting\) cache\.put\(/);
+});

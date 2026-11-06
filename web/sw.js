@@ -6,12 +6,15 @@
 // Updates: a new worker normally WAITS after install (the open page keeps its own cache generation, so lazily imported
 // modules never come from a different version than the running JS) and activates only when the page asks for it
 // (MSG_SKIP, the 刷新 button; see js/ui/update.js). Pages from before this prompt existed (<= v7) cannot ask, so at
-// install the worker pings every open window; if any one does not answer it activates immediately, as v7 always did.
+// install the worker pings every open app window (same origin AND under SCOPE_PATH; other tabs of a shared origin such
+// as the WebDAV host's own pages are ignored); if any one does not answer it activates immediately, as v7 always did.
+// While a newer worker is installing/waiting this worker stops writing revalidated responses into its cache, so the
+// running page keeps getting its own generation's bytes (a lazy import never mixes in the new deploy).
 // Constants repeat js/core/swupdate.js (a classic worker cannot import it); test/swupdate.test.js keeps them equal.
 const CACHE = 'pyreader-web-v7';
 const MSG_PING = 'pyreader:ping';
 const MSG_SKIP = 'pyreader:skip-waiting';
-const PING_TIMEOUT_MS = 500;
+const PING_TIMEOUT_MS = 2000;
 const SCOPE_PATH = new URL('./', self.location).pathname;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
@@ -27,9 +30,10 @@ const SHELL = [
   'vendor/jszip.min.js', 'vendor/marked.esm.js', 'vendor/foliate-mobi.js',
 ];
 
-// true when every open window answered the ping with {capable: true} (no windows at all counts as yes)
+// true when every open app window answered the ping with {capable: true} (no windows at all counts as yes)
 async function allWindowsCanPrompt() {
-  const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const wins = all.filter((w) => { try { return new URL(w.url).pathname.startsWith(SCOPE_PATH); } catch { return false; } });
   const answers = await Promise.all(wins.map((w) => new Promise((resolve) => {
     const ch = new MessageChannel();
     const t = setTimeout(() => resolve(false), PING_TIMEOUT_MS);
@@ -63,7 +67,11 @@ self.addEventListener('fetch', (e) => {
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(req, { ignoreSearch: true });
-    const net = fetch(req).then((r) => { if (r && r.ok && r.type === 'basic') cache.put(req, r.clone()); return r; }).catch(() => null);
+    const net = fetch(req).then((r) => {
+      // a newer worker installing/waiting means the network now serves the NEXT version: keep it out of this generation
+      if (r && r.ok && r.type === 'basic' && !self.registration.installing && !self.registration.waiting) cache.put(req, r.clone());
+      return r;
+    }).catch(() => null);
     if (hit) { net.catch(() => {}); return hit; }
     const r = await net;
     if (r) return r;
