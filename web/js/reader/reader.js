@@ -90,7 +90,7 @@ export class ReaderView {
       count: () => (this.book ? this.book.sections.length : 0),
       text: (i) => this.sectionText(i),
       title: (i) => (this.book && this.book.sections[i] && this.book.sections[i].title) || '',
-      start: () => ({ s: this.s, o: this.pg.pageRange()[0] }),
+      start: () => ({ s: this.s, o: this.s === this.contentS ? this.pg.pageRange()[0] : 0 }),   // this.s is ahead of the laid-out text while a section loads
       here: () => this.pg.currentOffset(),
       visible: (s, o) => { if (s !== this.contentS) return false; const [a, b] = this.pg.pageRange(); return o >= a && o < Math.max(b, a + 1); },
       section: () => this.contentS,
@@ -658,7 +658,7 @@ export class ReaderView {
 
   async gotoTarget(s, where) {
     if (this.pdf) { await this.setPdfPage(s, true); return; }
-    if (s === this.s) {
+    if (s === this.s && s === this.contentS) {   // not while that section is still loading: the paginator holds the old text
       if (where.anchor) this.pg.gotoOffset(resolveOffset(where.anchor, this.pg.fullText()));
       else if (where.id) { if (!this.pg.gotoId(where.id)) this.pg.gotoOffset(0); }
       else if (where.offset !== undefined) this.pg.gotoOffset(where.offset);

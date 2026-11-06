@@ -157,6 +157,7 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .findbar .find-input { flex: 1 1 120px; min-width: 0; width: auto; font-size: 16px; margin-right: 4px; }
 .findbar .find-count { flex: 0 1 auto; min-width: 70px; max-width: 46%; text-align: center; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .findbar .find-count.none { color: var(--danger); }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .findbar .icon-btn { width: 40px; height: 40px; flex: none; }
 .reader.finding .stage { top: calc(env(safe-area-inset-top) + var(--find-h) + 8px); }
 .reader.finding .topbar { transform: translateY(-110%); }

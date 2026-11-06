@@ -10,8 +10,10 @@ const escapeRe = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * Typed text -> RegExp, or null when blank. Literal match (no regex syntax), case-insensitive with Unicode folding,
  * and any run of whitespace in the query matches any run of whitespace in the book (HTML collapses line breaks).
  */
+export const MAX_QUERY = 200;   // a pasted chapter would make V8 throw "regular expression too large"
+
 export function compileQuery(q) {
-  const words = String(q ?? '').trim().split(/\s+/).filter(Boolean);
+  const words = String(q ?? '').slice(0, MAX_QUERY).trim().split(/\s+/).filter(Boolean);
   if (!words.length) return null;
   return new RegExp(words.map(escapeRe).join('\\s+'), 'giu');
 }

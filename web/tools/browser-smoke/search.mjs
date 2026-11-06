@@ -185,6 +185,33 @@ await page.screenshot({ path: SHOTS + '/search-spread.png' });
 await page.keyboard.press('Escape'); await wait(300);
 await page.setViewportSize({ width: 900, height: 700 }); await wait(500);
 
+// ---- two jumps into a section that is still loading: the later one wins, nothing lands on the earlier hit
+await page.keyboard.press('Control+f'); await wait(300);
+await page.evaluate(() => window.__pyreader.reader.showSection(0, { start: true })); await wait(500);
+const race = await page.evaluate(async () => {
+  const r = window.__pyreader.reader;
+  const orig = r.pg.setContent.bind(r.pg);
+  r.pg.setContent = async (...a) => { await new Promise((res) => setTimeout(res, 150)); return orig(...a); };   // a slow section (many images)
+  const p1 = r.gotoTarget(10, { offset: 0 });
+  for (let i = 0; i < 400 && !(r.s === 10 && r.contentS !== 10); i++) await new Promise((res) => setTimeout(res, 0));   // r.s is already 10 while its text is still being laid out
+  const during = r.s === 10 && r.contentS !== 10;
+  const p2 = r.gotoTarget(10, { offset: 1900 });   // same section, issued while the first load is pending
+  await Promise.all([p1, p2]);
+  r.pg.setContent = orig;
+  const [a, b] = r.pg.pageRange();
+  return { during, s: r.s, cs: r.contentS, a, b, ok: 1900 >= a && 1900 < Math.max(b, a + 1) };
+});
+ok(race.during && race.ok && race.s === 10 && race.cs === 10, 'two jumps into a loading section: the later offset is the one shown', JSON.stringify(race));
+
+// ---- a pasted chapter as query: capped, still finishes; screen-reader live region carries only results
+await typeQuery('字'.repeat(50000)); await wait(1500);
+const longq = await page.evaluate(() => { const f = window.__pyreader.reader.find; return { len: f.input.value.length, done: f.done, text: f.count.textContent }; });
+ok(longq.len <= 200 && longq.done && longq.text === '没有找到', 'very long query: input capped, search finishes', JSON.stringify(longq));
+await typeQuery('zebra'); await settled();
+const liveT = await page.evaluate(() => { const f = window.__pyreader.reader.find; return { live: f.live.textContent, vis: f.count.textContent, lr: f.count.getAttribute('role'), aria: f.count.getAttribute('aria-hidden') }; });
+ok(liveT.live === liveT.vis && /^\d+ \/ \d+$/.test(liveT.live) && !liveT.lr, 'live region mirrors the final result only', JSON.stringify(liveT));
+await page.keyboard.press('Escape'); await wait(300);
+
 // ---- EPUB
 await page.evaluate(() => { history.replaceState(null, '', '#/'); window.dispatchEvent(new PopStateEvent('popstate')); }); await wait(400);
 await openBook('测试之书');

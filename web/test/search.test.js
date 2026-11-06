@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compileQuery, findAll, countIn, totalHits, rankOf, stepHit, hitAtOrAfter, seekHit, sectionOrder, snippet, MAX_HITS } from '../js/core/search.js';
+import { compileQuery, findAll, countIn, totalHits, rankOf, stepHit, hitAtOrAfter, seekHit, sectionOrder, snippet, MAX_HITS, MAX_QUERY } from '../js/core/search.js';
 
 const hits = (text, q, limit) => {
   const flat = findAll(text, compileQuery(q), limit);
@@ -132,4 +132,10 @@ test('end to end over sections: scan from the reader, jump, step back around the
   assert.equal(rankOf(matches, start), 3);
   assert.deepEqual(stepHit(matches, start, 1), { s: 0, k: 0 });
   assert.deepEqual(stepHit(matches, { s: 0, k: 0 }, -1), { s: 2, k: 1 });
+});
+
+test('an enormous query is cut to MAX_QUERY and still compiles and runs', () => {
+  const re = compileQuery('字'.repeat(50000));
+  assert.ok(re);
+  assert.deepEqual(findAll('字'.repeat(MAX_QUERY + 5), re), [0, MAX_QUERY]);
 });

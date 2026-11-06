@@ -7,7 +7,7 @@
 //   range(a, b) -> Range for the laid-out section, onToggle(open).
 import { h, openPanel, debounce, sleep } from '../ui/dom.js';
 import { icon } from '../ui/icons.js';
-import { compileQuery, findAll, totalHits, rankOf, stepHit, seekHit, hitAtOrAfter, sectionOrder, snippet, MAX_HITS } from '../core/search.js';
+import { compileQuery, findAll, totalHits, rankOf, stepHit, seekHit, hitAtOrAfter, sectionOrder, snippet, MAX_HITS, MAX_QUERY } from '../core/search.js';
 
 const LIST_MAX = 500;
 const PAINT_BEFORE = 100, PAINT_AFTER = 200;   // highlight only the hits around the reading position: a common word has thousands
@@ -26,13 +26,15 @@ export class FindBar {
     this.navSeq = 0;
     this.compEnd = 0;       // time of the last IME compositionend (a Safari quirk delivers the commit Enter after it)
     this.selSet = false;
-    this.input = h('input', { type: 'search', class: 'find-input', placeholder: '在全文中搜索…', 'aria-label': '搜索关键词', enterKeyHint: 'search', autocomplete: 'off', autocapitalize: 'off', spellcheck: false });
-    this.count = h('span', { class: 'find-count', role: 'status', 'aria-live': 'polite' });
+    this.input = h('input', { type: 'search', class: 'find-input', placeholder: '在全文中搜索…', 'aria-label': '搜索关键词', enterKeyHint: 'search', autocomplete: 'off', autocapitalize: 'off', spellcheck: false, maxlength: MAX_QUERY });
+    this.count = h('span', { class: 'find-count', 'aria-hidden': 'true' });
+    this.live = h('span', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });   // the result only: the per-section progress would flood a screen reader
+    this.liveT = '';
     this.btnPrev = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '上一个（Shift+Enter）', title: '上一个（Shift+Enter）', onclick: () => this.step(-1) }, icon('up'));
     this.btnNext = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '下一个（Enter）', title: '下一个（Enter）', onclick: () => this.step(1) }, icon('down'));
     this.btnList = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '结果列表', title: '结果列表', onclick: () => this.openList() }, icon('list'));
     this.btnClose = h('button', { class: 'icon-btn find-close', type: 'button', 'aria-label': '关闭搜索', title: '关闭（Esc）', onclick: () => this.close() }, icon('close'));
-    this.el = h('div', { class: 'findbar', role: 'search', 'aria-label': '全文搜索', hidden: true }, this.input, this.btnClose, this.count, this.btnPrev, this.btnNext, this.btnList);
+    this.el = h('div', { class: 'findbar', role: 'search', 'aria-label': '全文搜索', hidden: true }, this.input, this.btnClose, this.count, this.btnPrev, this.btnNext, this.btnList, this.live);
     this.go = debounce(() => this.run(), 220);
     this.repaintSoon = debounce(() => this.paint(), 150);
     this.input.addEventListener('input', (e) => { if (!e.isComposing) this.go(); });
@@ -121,7 +123,8 @@ export class FindBar {
       let text = '';
       try { text = await this.host.text(i); } catch (e) { console.warn('[search] section unreadable', i, e); }
       if (my !== this.token) return;
-      const flat = findAll(text, re, MAX_HITS - found);
+      let flat = [];
+      try { flat = findAll(text, re, MAX_HITS - found); } catch (e) { console.warn('[search] scan failed', e); }
       if (flat.length) { matches[i] = flat; found += flat.length / 2; }
       this.scanned = idx + 1;
       if (!this.placed && flat.length && i >= start.s) {   // still before the wrap-around: the first hit after the reader
@@ -146,6 +149,8 @@ export class FindBar {
       else t = this.cur ? `${rankOf(this.matches, this.cur)} / ${total}${this.capped ? '+' : ''}` : `共 ${total} 处`;
     }
     this.count.textContent = t;
+    const lt = this.done ? t : '';
+    if (lt !== this.liveT) this.live.textContent = this.liveT = lt;
     this.count.classList.toggle('none', this.done && !!this.q.trim() && !total);
     this.btnPrev.disabled = this.btnNext.disabled = this.btnList.disabled = !total;
   }
