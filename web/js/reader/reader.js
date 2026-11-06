@@ -256,7 +256,7 @@ export class ReaderView {
       if (seq !== this.seq) return;
       this.loading.hidden = true;
       this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
-      touchOpened(meta).catch(() => {});
+      touchOpened(meta, Math.round(stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0) * 1000)).catch(() => {});
       this.checkRemote(saved);
       this.refreshMarkButton();
       this.maybeShowHint();

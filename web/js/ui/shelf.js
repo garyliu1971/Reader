@@ -6,10 +6,11 @@ import { syncMgr } from '../sync/manager.js';
 import { fieldValue } from '../core/shelfmerge.js';
 import { storageEstimate, persistRequest } from '../store/db.js';
 import { remoteBookId } from '../core/bookid.js';
+import { continueCandidate, ago, DONE_PERCENT } from '../core/recent.js';
 
 const SORTS = [['recent', '最近阅读'], ['title', '书名'], ['added', '加入时间'], ['progress', '阅读进度']];
-const FILTERS = [['all', '全部'], ['reading', '在读'], ['unread', '未读'], ['done', '读完'], ['fav', '收藏'], ['cloud', '云端'], ['hidden', '已隐藏']];
-const DONE = 97;
+const FILTERS = [['all', '全部'], ['recent', '最近'], ['reading', '在读'], ['unread', '未读'], ['done', '读完'], ['fav', '收藏'], ['cloud', '云端'], ['hidden', '已隐藏']];
+const DONE = DONE_PERCENT;
 const coll = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
 
 function hue(str) { let x = 0; for (const c of str) x = (x * 31 + c.codePointAt(0)) >>> 0; return x % 360; }
@@ -41,6 +42,7 @@ export class ShelfView {
     this.chips = h('div', { class: 'chips', role: 'group', 'aria-label': '筛选' });
     this.syncLine = h('div', { class: 'sync-line', role: 'status' });
     this.grid = h('div', { class: 'grid', role: 'list' });
+    this.contBox = h('div', { class: 'continue-box' });
     this.syncBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '立即同步', onclick: () => this.syncNow() }, icon('sync'));
     this.installBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '安装应用', hidden: true, onclick: () => this.ctx.installPrompt() }, icon('install'));
     const head = h('header', { class: 'shelf-head' },
@@ -50,7 +52,7 @@ export class ShelfView {
         h('button', { class: 'btn primary', type: 'button', onclick: () => this.fileInput.click() }, icon('plus', 18), '导入')),
       h('div', { class: 'shelf-tools' }, this.search, this.sortSel),
       this.chips, this.syncLine);
-    this.root.replaceChildren(head, this.grid, this.fileInput);
+    this.root.replaceChildren(head, this.contBox, this.grid, this.fileInput);
     this.renderChips();
   }
 
@@ -86,7 +88,7 @@ export class ShelfView {
       if (d && d.updated * 1000 > (b.lastRead || 0) && Math.abs(d.percent - percent) >= 0.5) { percent = d.percent; remoteNote = `${d.device} 读到 ${d.percent.toFixed(1)}%`; }
       out.push({
         id: b.id, title: b.title, author: b.author, format: b.format, size: b.size, percent, remoteNote, cloud: false,
-        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source,
+        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), touched: Math.max(b.lastRead || 0, b.openedAt || 0, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source,
         fav: !!fieldValue(merged, b.id, 'fav', false), hidden: !!fieldValue(merged, b.id, 'hidden', false),
       });
     }
@@ -99,7 +101,7 @@ export class ShelfView {
         out.push({
           id, title: stemOf(baseName(f.rel)), author: '', format: (f.rel.split('.').pop() || '').toLowerCase().replace('markdown', 'md').replace('htm', 'html'), size: f.size,
           percent: d ? d.percent : 0, remoteNote: d ? `${d.device} 读到 ${d.percent.toFixed(1)}%` : '', cloud: true, uploading: unstable.has(f.rel),
-          lastRead: d ? d.updated * 1000 : 0, addedAt: (f.mtime || 0) * 1000, rel: f.rel, source: 'remote', mtime: f.mtime,
+          lastRead: d ? d.updated * 1000 : 0, touched: d ? d.updated * 1000 : 0, addedAt: (f.mtime || 0) * 1000, rel: f.rel, source: 'remote', mtime: f.mtime,
           fav: !!fieldValue(merged, id, 'fav', false), hidden: !!fieldValue(merged, id, 'hidden', false),
         });
       }
@@ -112,6 +114,7 @@ export class ShelfView {
       if (this.filter === 'hidden') return e.hidden;
       if (e.hidden) return false;
       switch (this.filter) {
+        case 'recent': return e.touched > 0;
         case 'reading': return e.percent > 0 && e.percent < DONE;
         case 'unread': return e.percent <= 0;
         case 'done': return e.percent >= DONE;
@@ -124,12 +127,13 @@ export class ShelfView {
       const q = this.q.normalize('NFC').toLowerCase();
       list = list.filter((e) => `${e.title} ${e.author}`.normalize('NFC').toLowerCase().includes(q));
     }
-    const by = {
-      recent: (a, b) => (b.lastRead || b.addedAt) - (a.lastRead || a.addedAt),
+    let by = {
+      recent: (a, b) => (b.touched || b.addedAt) - (a.touched || a.addedAt),
       title: (a, b) => coll.compare(a.title, b.title),
       added: (a, b) => b.addedAt - a.addedAt,
       progress: (a, b) => b.percent - a.percent,
     }[this.sort];
+    if (this.filter === 'recent') by = (a, b) => b.touched - a.touched;   // the 最近 chip is always newest-first
     return list.sort((a, b) => by(a, b) || coll.compare(a.title, b.title));
   }
 
@@ -143,6 +147,7 @@ export class ShelfView {
     this.urls = [];
     const list = this.view(entries);
     this.grid.replaceChildren();
+    this.renderContinue(entries);
     if (!entries.length) {
       this.grid.replaceChildren(h('div', { class: 'empty', style: 'grid-column:1/-1' },
         h('p', null, '书架是空的。'), h('p', null, '点右上角“导入”，或把 EPUB / TXT / Markdown / HTML / PDF 文件拖到这个页面。'),
@@ -153,7 +158,8 @@ export class ShelfView {
     for (const e of list) this.grid.append(this.card(e));
   }
 
-  card(e) {
+  /** cover (generated tile, replaced by the real cover when the book has one) with badge/format decorations */
+  makeCover(e) {
     const cover = h('div', { class: 'cover' });
     const letter = Array.from(e.title.trim())[0] || '书';
     const tile = h('div', { class: 'tile', 'aria-hidden': 'true', style: `background:linear-gradient(145deg,hsl(${hue(e.title)} 45% 38%),hsl(${(hue(e.title) + 40) % 360} 50% 28%))` },
@@ -161,6 +167,31 @@ export class ShelfView {
     cover.append(tile);
     if (!e.cloud) coverUrl(e.id).then((u) => { if (u) { this.urls.push(u); cover.replaceChildren(h('img', { src: u, alt: '', loading: 'lazy', decoding: 'async' })); this.decorate(cover, e); } }).catch(() => {});
     this.decorate(cover, e);
+    return cover;
+  }
+
+  /** "继续阅读": the book you were last in, one tap from the top of the shelf */
+  renderContinue(entries) {
+    const e = !this.q && ['all', 'recent'].includes(this.filter) ? continueCandidate(entries) : null;
+    if (!e) { this.contBox.replaceChildren(); return; }
+    const pct = Math.max(0, Math.min(100, e.percent));
+    // floor, not round: 96.6% must not read as 97% (finished) while the book is still offered
+    const where = pct > 0 ? `读到 ${pct < 10 ? pct.toFixed(1) : Math.floor(pct)}%` : '刚打开';
+    // remoteNote ("设备 读到 N%") is set exactly when the percentage comes from another device: it replaces `where`
+    const sub = [e.remoteNote || where, ago(e.touched)].filter(Boolean).join(' · ');
+    this.contBox.replaceChildren(h('section', { class: 'continue', 'aria-label': '继续阅读' },
+      h('button', { class: 'continue-open', type: 'button', onclick: () => this.openEntry(e) },
+        h('div', { class: 'mini-cover' }, this.makeCover(e)),
+        h('div', { class: 'continue-info' },
+          h('div', { class: 'kicker', text: e.cloud ? '继续阅读（云端）' : '继续阅读' }),
+          h('div', { class: 'ct', text: e.title }),
+          h('div', { class: 'bar', 'aria-hidden': 'true' }, h('i', { style: `width:${pct}%` })),
+          h('div', { class: 'cs', text: sub })),
+        h('span', { class: 'go', 'aria-hidden': 'true' }, icon('chevron', 22)))));
+  }
+
+  card(e) {
+    const cover = this.makeCover(e);
     const pct = Math.max(0, Math.min(100, e.percent));
     const more = h('button', { class: 'more icon-btn', type: 'button', 'aria-label': `${e.title} 的更多操作`, onclick: (ev) => { ev.stopPropagation(); this.menu(e); } }, icon('more', 20));
     if (e.fav) cover.append(h('span', { class: 'favmark', 'aria-label': '已收藏' }, icon('starFill', 18)));

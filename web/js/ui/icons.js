@@ -19,6 +19,7 @@ const P = {
   next: '<path d="M9 5l7 7-7 7M5 5v14" transform="translate(1 0)"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5M5 20h14"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  chevron: '<path d="M9 5l7 7-7 7"/>',
   speaker: '<path d="M4 9v6h4l5 4V5L8 9zM16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12"/>',
   play: '<path d="M8 5l11 7-11 7z" fill="currentColor"/>',
   pause: '<path d="M8 5v14M16 5v14"/>',

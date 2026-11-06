@@ -32,5 +32,10 @@ for (const scheme of ['light', 'dark']) {
   await page.keyboard.press('r'); await wait(500);
   console.log('tts bar visible:', await page.evaluate(() => { const b = document.querySelector('.tts-bar'); return !!b && getComputedStyle(b).display !== 'none'; }));
   await run(page, `reading, tts bar on ${scheme}`);
+  // back on the shelf with the "继续阅读" card showing (the first scan above ran before any book was opened)
+  await page.evaluate(() => window.__pyreader.reader.ctx.goShelf()); await wait(800);
+  console.log('continue card visible:', await page.evaluate(() => { const c = document.querySelector('.continue'); return !!c && c.getBoundingClientRect().height > 0; }));
+  await run(page, `shelf with continue card ${scheme}`);
+  await page.screenshot({ path: SHOTS + `/a11y-continue-${scheme}.png` });
   await browser.close();
 }
