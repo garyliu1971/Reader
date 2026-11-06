@@ -11,7 +11,7 @@ const SHELL = [
   'js/core/anchor.js', 'js/core/bookid.js', 'js/core/chapters.js', 'js/core/names.js', 'js/core/progress.js', 'js/core/sha1.js',
   'js/core/recent.js', 'js/core/shelfmerge.js', 'js/core/textenc.js',
   'js/parse/epub.js', 'js/parse/mobi.js', 'js/parse/mobicheck.js', 'js/parse/pdf.js', 'js/parse/sanitize.js', 'js/parse/textbooks.js', 'js/parse/txt.worker.js', 'js/parse/txtparse.js',
-  'js/reader/paginator.js', 'js/reader/reader.js', 'js/reader/tts.js',
+  'js/reader/paginator.js', 'js/reader/reader.js', 'js/reader/tts.js', 'js/reader/translate.js',
   'js/store/db.js', 'js/store/settings.js',
   'js/sync/manager.js', 'js/sync/propfind.js', 'js/sync/sync.js', 'js/sync/webdav.js',
   'js/ui/dom.js', 'js/ui/icons.js', 'js/ui/settings.js', 'js/ui/shelf.js',
