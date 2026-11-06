@@ -3,6 +3,8 @@
 import { h, openPanel, toast, debounce, sleep } from '../ui/dom.js';
 import { icon } from '../ui/icons.js';
 import { Paginator } from './paginator.js';
+import { TtsReader, pickVoice } from './tts.js';
+import { kvGet, kvSet } from '../store/db.js';
 import { openStored, touchOpened, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
@@ -45,13 +47,14 @@ export class ReaderView {
     const r = this.root;
     r.replaceChildren();
     this.titleEl = h('div', { class: 'title' });
-    this.btnToc = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '目录和书签', onclick: () => this.openToc('toc') }, icon('menu'));
+    this.btnToc = h('button', { class: 'icon-btn labelled', type: 'button', 'aria-label': '目录和书签', onclick: () => this.openToc('toc') }, icon('menu'), h('span', { class: 'lbl', 'aria-hidden': 'true' }, '目录'));
+    this.btnTts = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '朗读', 'aria-pressed': 'false', onclick: () => this.toggleTts() }, icon('speaker'));
     this.btnSearch = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '搜索全文', onclick: () => this.openSearch() }, icon('search'));
     this.btnMark = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '添加书签', 'aria-pressed': 'false', onclick: () => this.toggleBookmark() }, icon('bookmark'));
     this.btnSet = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '阅读设置', onclick: () => this.openSettings() }, icon('font'));
     this.topbar = h('div', { class: 'topbar', role: 'toolbar', 'aria-label': '阅读工具栏' },
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '返回书架', onclick: () => this.ctx.goShelf() }, icon('back')),
-      this.titleEl, this.btnToc, this.btnSearch, this.btnMark, this.btnSet);
+      this.titleEl, this.btnToc, this.btnSearch, this.btnTts, this.btnMark, this.btnSet);
     this.content = h('div', { class: 'content', lang: 'zh-CN' });
     this.scrollNav = h('div', { class: 'scroll-nav row' },
       h('button', { class: 'btn', type: 'button', onclick: () => this.chapter(-1) }, '上一章'),
@@ -67,8 +70,35 @@ export class ReaderView {
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '上一章', onclick: () => this.chapter(-1) }, icon('prev')),
       this.slider, this.pctLabel,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '下一章', onclick: () => this.chapter(1) }, icon('next'))));
+    this.ttsState = h('span', { class: 'state', 'aria-live': 'polite' }, '朗读中');
+    this.ttsPlay = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '暂停朗读', onclick: () => this.ttsPauseResume() }, icon('pause'));
+    this.ttsRateEl = h('span', { class: 'rate' }, '1.0x');
+    this.ttsBar = h('div', { class: 'tts-bar', role: 'toolbar', 'aria-label': '朗读控制' },
+      this.ttsState,
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': '减慢语速', onclick: () => this.ttsStep(-0.1) }, '−'),
+      this.ttsRateEl,
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': '加快语速', onclick: () => this.ttsStep(0.1) }, '+'),
+      this.ttsPlay,
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': '停止朗读', onclick: () => this.tts && this.tts.stop() }, icon('stop')));
     this.loading = h('div', { class: 'loading', role: 'status' }, '正在打开…');
-    r.append(this.stage, this.status, this.topbar, this.bottom, this.loading);
+    r.append(this.stage, this.status, this.topbar, this.bottom, this.ttsBar, this.loading);
+    this._ttsMoving = 0;
+    this.tts = null;
+    if (TtsReader.supported()) {
+      this.tts = new TtsReader({
+        synth: globalThis.speechSynthesis, Utter: globalThis.SpeechSynthesisUtterance,
+        host: {
+          text: () => this.pg.fullText(),
+          breaks: () => this.pg.breaks,
+          reveal: (a, b) => this.ttsReveal(a, b),
+          nextSection: () => this.ttsNextSection(),
+          changed: (st) => this.ttsChanged(st),
+          finished: () => toast('朗读完毕', { ms: 1800 }),
+          failed: (m) => { if (m) toast(m, { ms: 6000 }); },
+          settings: () => this.settings || {},
+        },
+      });
+    } else this.btnTts.hidden = true;
 
     this.pg = new Paginator(this.frame, this.content);
     this.pg.onChange = (reason) => this.onPaginator(reason);
@@ -170,6 +200,7 @@ export class ReaderView {
         case 'b': case 'B': this.toggleBookmark(); break;
         case '/': e.preventDefault(); this.openSearch(); break;
         case 'm': case 'M': this.setBars(!this.barsOn()); break;
+        case 'r': case 'R': this.toggleTts(); break;
         default: return;
       }
       e.preventDefault();
@@ -207,6 +238,8 @@ export class ReaderView {
       this.content.hidden = this.pdf;
       this.btnSearch.disabled = this.pdf;
       this.btnSearch.title = this.pdf ? 'PDF 暂不支持全文搜索' : '';
+      this.btnTts.disabled = this.pdf;
+      this.btnTts.title = this.pdf ? 'PDF 暂不支持朗读' : '朗读（R）';
       this.searchCache.clear();
       const saved = await getProgress(id);
       this.lastSaved = saved || null;
@@ -226,6 +259,7 @@ export class ReaderView {
       touchOpened(meta).catch(() => {});
       this.checkRemote(saved);
       this.refreshMarkButton();
+      this.maybeShowHint();
     } catch (e) {
       console.error(e);
       this.loading.textContent = '打开失败：' + (e && e.message ? e.message : e);
@@ -234,6 +268,7 @@ export class ReaderView {
   }
 
   closeBook() {
+    if (this.tts) this.tts.stop();
     if (this.book) { try { this.book.close(); } catch { /* ignore */ } }
     this.book = null;
     this.content.replaceChildren();
@@ -255,6 +290,8 @@ export class ReaderView {
     applyTheme(s.theme);
     applyTypography(this.root, s);
     this.pg.animate = true;
+    this.pg.spread = s.spread;
+    this.pg.maxLineEm = s.lineWidth;
     if (this.book && !this.pdf && this.pg.mode !== s.mode) this.pg.setMode(s.mode);
     if (this.pdfCanvas) this.pdfCanvas.classList.toggle('invert', isDarkNow());
     if (relayout && this.book) { if (this.pdf) this.renderPdf(); else this.pg.relayoutNow(); }
@@ -265,8 +302,67 @@ export class ReaderView {
     this.settings = normalize({ ...this.settings, [key]: value });
     saveSettings(this.settings).catch(() => {});
     if (key === 'fontSize') toast(`字号 ${this.settings.fontSize}`, { ms: 900 });
-    this.applySettings(true);
+    if (!key.startsWith('tts')) this.applySettings(true);
     if (this.settingsSync) this.settingsSync();
+  }
+
+  // ------------------------------------------------------------------ read aloud (speechSynthesis)
+  toggleTts() {
+    if (!this.tts || !this.book || this.pdf) return;
+    if (this.tts.state === 'idle') {
+      this.setBars(false);
+      if (this._hintToast) { this._hintToast.remove(); this._hintToast = null; } // the one-time tip would sit on top of the control bar
+      this.tts.start(this.pg.pageRange()[0]);
+    } else this.tts.stop();
+  }
+
+  ttsPauseResume() {
+    if (!this.tts) return;
+    if (this.tts.state === 'playing') this.tts.pause(); else this.tts.resume();
+  }
+
+  ttsStep(d) {
+    const v = Math.round((this.settings.ttsRate + d) * 10) / 10;
+    this.setSetting('ttsRate', v);
+    this.ttsRateEl.textContent = this.settings.ttsRate.toFixed(1) + 'x';
+  }
+
+  ttsChanged(st) {
+    this.root.classList.toggle('tts-on', st !== 'idle');
+    this.btnTts.setAttribute('aria-pressed', String(st !== 'idle'));
+    this.ttsState.textContent = st === 'paused' ? '已暂停' : '朗读中';
+    this.ttsPlay.replaceChildren(icon(st === 'paused' ? 'play' : 'pause'));
+    this.ttsPlay.setAttribute('aria-label', st === 'paused' ? '继续朗读' : '暂停朗读');
+    if (this.settings) this.ttsRateEl.textContent = this.settings.ttsRate.toFixed(1) + 'x';
+    if (st === 'idle' && globalThis.CSS && CSS.highlights) CSS.highlights.delete('tts');
+  }
+
+  /** called before each sentence is spoken: bring it into view (turning the page if needed) and highlight it */
+  ttsReveal(a, b) {
+    const [s, e] = this.pg.pageRange();
+    if (a < s || a >= e) {
+      this._ttsMoving++;
+      try { this.pg.gotoOffset(a); } finally { this._ttsMoving--; }
+    }
+    const range = this.pg.rangeFor(a, b);
+    if (range && globalThis.CSS && CSS.highlights && globalThis.Highlight) CSS.highlights.set('tts', new Highlight(range));
+  }
+
+  async ttsNextSection() {
+    if (!this.book || this.s >= this.book.sections.length - 1) return false;
+    this._ttsMoving++;
+    try { await this.showSection(this.s + 1, { start: true }); } finally { this._ttsMoving--; }
+    this.markDirty();
+    return true;
+  }
+
+  /** one-time tip: the toolbars are hidden until the middle of the page is tapped */
+  async maybeShowHint() {
+    try {
+      if (await kvGet('hint.reader.v1', false)) return;
+      await kvSet('hint.reader.v1', true);
+    } catch { return; }
+    this._hintToast = toast('点击页面中间呼出菜单（目录、搜索、朗读、设置），点击左右两侧翻页。快捷键：T 目录，R 朗读。', { ms: 8000 });
   }
 
   openSettings() {
@@ -297,16 +393,47 @@ export class ReaderView {
     const mg = range('页边距', 'margin', 2, (v) => v + 'px');
     const ps = range('段间距', 'paraSpace', 0.05, (v) => v.toFixed(2) + 'em');
     const mode = seg([['paged', '分页'], ['scroll', '连续滚动']], 'mode');
+    const lw = seg([[30, '窄'], [40, '标准'], [55, '宽'], [0, '不限']], 'lineWidth');
+    const rate = range('朗读语速', 'ttsRate', 0.1, (v) => v.toFixed(1) + 'x');
+    let offVoices = null;
+    const ttsBlock = [];
+    if (this.tts) {
+      const synth = globalThis.speechSynthesis;
+      const sel = h('select', { 'aria-label': '朗读音色', onchange: () => this.setSetting('ttsVoice', sel.value) });
+      const fill = () => {
+        const vs = (synth.getVoices() || []).slice().sort((a, b) => (Number(b.lang.startsWith('zh')) - Number(a.lang.startsWith('zh'))) || a.name.localeCompare(b.name));
+        sel.replaceChildren(h('option', { value: '', text: '自动（优先中文自然音色）' }), ...vs.map((v) => h('option', { value: v.voiceURI, text: `${v.name} (${v.lang})` })));
+        sel.value = s().ttsVoice;
+      };
+      fill();
+      synth.addEventListener('voiceschanged', fill);
+      offVoices = () => synth.removeEventListener('voiceschanged', fill);
+      const sample = () => {
+        if (this.tts.state !== 'idle') { toast('正在朗读，先停止后再试听', { ms: 1500 }); return; }
+        const u = new SpeechSynthesisUtterance('这是朗读示例：天地玄黄，宇宙洪荒。');
+        const v = pickVoice(synth.getVoices(), 'zh-CN', s().ttsVoice);
+        u.lang = v ? v.lang : 'zh-CN';
+        if (v) u.voice = v;
+        u.rate = s().ttsRate;
+        synth.cancel();
+        synth.speak(u);
+      };
+      ttsBlock.push(h('label', { class: 'field' }, h('span', null, '朗读音色'), sel), rate.el,
+        h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: sample }, '试听')),
+        h('p', { class: 'hint', text: '朗读用浏览器自带的语音：Edge 带“Natural”的在线中文音色效果最好（需联网）；手机锁屏后系统可能暂停朗读。快捷键 R 开始/停止。' }));
+    }
     const typo = [
       h('label', { class: 'field' }, h('span', null, '字体'), fam.wrap), fs.el, lh.el, mg.el, ps.el,
-      h('div', { class: 'row' }, toggle('首行缩进', 'indent'), toggle('两端对齐', 'justify')),
+      h('label', { class: 'field' }, h('span', null, '行宽上限（宽屏时居中）'), lw.wrap),
+      h('div', { class: 'row' }, toggle('首行缩进', 'indent'), toggle('两端对齐', 'justify'), toggle('宽屏双页', 'spread')),
       h('label', { class: 'field' }, h('span', null, '翻页方式'), mode.wrap),
+      ...ttsBlock,
     ];
     const body = [h('label', { class: 'field' }, h('span', null, '主题'), theme.wrap),
       ...(this.pdf ? [h('p', { class: 'hint', text: 'PDF 为固定版式，暂不支持字体/行距/边距设置（仅主题：夜间模式会反色显示）。' })] : typo),
       h('p', { class: 'hint', text: '快捷键：Ctrl/⌘ + 加号/减号/0 调字号；左右方向键、PageUp/PageDown、空格翻页；T 目录；B 书签；/ 搜索；双指捏合也可调字号。' })];
-    this.settingsSync = () => { theme.upd(); fam.upd(); fs.upd(); lh.upd(); mg.upd(); ps.upd(); mode.upd(); };
-    const p = openPanel({ title: '阅读设置', side: 'sheet', content: body, onClose: () => { this.settingsSync = null; } });
+    this.settingsSync = () => { theme.upd(); fam.upd(); fs.upd(); lh.upd(); mg.upd(); ps.upd(); mode.upd(); if (!this.pdf) { lw.upd(); rate.upd(); } };
+    const p = openPanel({ title: '阅读设置', side: 'sheet', content: body, onClose: () => { this.settingsSync = null; if (offVoices) offVoices(); } });
     return p;
   }
 
@@ -403,7 +530,12 @@ export class ReaderView {
   }
 
   onPaginator(reason) {
-    if (reason === 'page') { this.clearHighlight(); this.markDirty(); }
+    if (reason === 'page') {
+      this.clearHighlight();
+      this.markDirty();
+      // the reader turned the page by hand while reading aloud: continue from the top of the new page
+      if (this.tts && this.tts.state !== 'idle' && !this._ttsMoving && this.pg.mode === 'paged') this.tts.restart(this.pg.pageRange()[0]);
+    }
     this.updateUi();
   }
 
@@ -420,7 +552,7 @@ export class ReaderView {
     if (this.pdf) return ((this.pdfPage + 1) / this.book.pageCount) * 100;
     const pg = this.pg;
     const last = this.s === this.book.sections.length - 1;
-    const atEnd = pg.mode === 'paged' ? pg.page >= pg.pageCount - 1 : pg.frame.scrollTop + pg.frame.clientHeight >= pg.frame.scrollHeight - 2;
+    const atEnd = pg.mode === 'paged' ? pg.page + pg.cols >= pg.pageCount : pg.frame.scrollTop + pg.frame.clientHeight >= pg.frame.scrollHeight - 2;
     const frac = last && atEnd ? 1 : pg.total ? pg.currentOffset() / pg.total : 0;
     return positionToPercent(this.book.lens, this.s, frac);
   }
@@ -447,6 +579,13 @@ export class ReaderView {
     return best;
   }
 
+  /** "3/12", or "3-4/12" when two pages are shown side by side */
+  pageLabel() {
+    const { page, cols, pageCount } = this.pg;
+    const last = Math.min(page + cols, pageCount);
+    return last > page + 1 ? `${page + 1}-${last}/${pageCount}` : `${page + 1}/${pageCount}`;
+  }
+
   updateUi() {
     if (!this.book) return;
     const pct = this.percent();
@@ -455,7 +594,7 @@ export class ReaderView {
     this.pctLabel.textContent = shown.toFixed(1) + '%';
     this.chEl.textContent = this.sectionTitle();
     this.posEl.textContent = this.pdf ? `第 ${this.pdfPage + 1}/${this.book.pageCount} 页 · ${shown.toFixed(1)}%`
-      : this.pg.mode === 'paged' ? `${this.pg.page + 1}/${this.pg.pageCount} · ${shown.toFixed(1)}%` : `${shown.toFixed(1)}%`;
+      : this.pg.mode === 'paged' ? `${this.pageLabel()} · ${shown.toFixed(1)}%` : `${shown.toFixed(1)}%`;
     this.refreshMarkButton();
   }
 

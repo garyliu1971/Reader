@@ -125,6 +125,7 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .content hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
 .content ruby rt { font-size: .5em; }
 ::highlight(search) { background: var(--hl); color: inherit; }
+::highlight(tts) { background: color-mix(in srgb, var(--accent) 26%, transparent); color: inherit; }
 .statusline { position: absolute; left: env(safe-area-inset-left); right: env(safe-area-inset-right); bottom: env(safe-area-inset-bottom); height: 28px; padding: 0 max(16px, var(--mx, 16px)); display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--muted); pointer-events: none; }
 .statusline .ch { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar, .bottombar { position: absolute; left: 0; right: 0; z-index: 30; background: var(--bar); border-color: var(--border); transition: transform .18s ease; backdrop-filter: blur(8px); }
@@ -132,6 +133,16 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .topbar .title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
 .bottombar { bottom: 0; padding: 8px max(16px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 8px) max(16px, env(safe-area-inset-left)); border-top: 1px solid var(--border); transform: translateY(110%); }
 .bars-on .topbar, .bars-on .bottombar { transform: none; }
+.icon-btn.labelled { width: auto; padding: 0 10px; gap: 4px; }
+.icon-btn .lbl { font-size: 13px; }
+@media (max-width: 420px) { .icon-btn .lbl { display: none; } .icon-btn.labelled { width: 40px; padding: 0; } }
+/* read-aloud control bar */
+.tts-bar { display: none; position: absolute; z-index: 30; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 40px); align-items: center; gap: 4px; padding: 4px 8px; background: var(--bar); border: 1px solid var(--border); border-radius: 999px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
+.reader.tts-on .tts-bar { display: flex; }
+.reader.bars-on .tts-bar { bottom: calc(env(safe-area-inset-bottom) + 84px); }
+.tts-bar .state { padding: 0 6px; color: var(--muted); white-space: nowrap; }
+.tts-bar .icon-btn { width: 40px; height: 40px; }
+.tts-bar .rate { min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
 .bottombar .line { display: flex; align-items: center; gap: 8px; }
 .bottombar .pctlabel { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; font-size: 14px; }
 .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); background: var(--bg); z-index: 25; }

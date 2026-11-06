@@ -11,8 +11,13 @@ export const DEFAULTS = {
   justify: true,
   paraSpace: 0.35,          // em between paragraphs
   mode: 'paged',            // paged | scroll
+  spread: true,             // two pages side by side when the window is wide (paged mode only)
+  lineWidth: 40,            // max text line length in em (CJK: about this many characters); 0 = unlimited
+  ttsRate: 1,               // read-aloud speed
+  ttsVoice: '',             // SpeechSynthesisVoice.voiceURI; '' = best voice for the language
 };
-export const LIMITS = { fontSize: [12, 40], lineHeight: [1.3, 2.6], margin: [8, 80], paraSpace: [0, 1.2] };
+export const LINE_WIDTHS = [30, 40, 55, 0];
+export const LIMITS = { fontSize: [12, 40], lineHeight: [1.3, 2.6], margin: [8, 80], paraSpace: [0, 1.2], ttsRate: [0.5, 2.5] };
 
 export const FONT_STACKS = {
   serif: '"Noto Serif SC","Source Han Serif SC","Songti SC","STSong","SimSun","Noto Serif",Georgia,serif',
@@ -29,7 +34,10 @@ export function normalize(s) {
   if (!(o.fontFamily in FONT_STACKS)) o.fontFamily = 'serif';
   if (!['paged', 'scroll'].includes(o.mode)) o.mode = 'paged';
   for (const k of Object.keys(LIMITS)) { o[k] = Number(o[k]); if (!Number.isFinite(o[k])) o[k] = DEFAULTS[k]; o[k] = clamp(o[k], LIMITS[k]); }
-  o.indent = !!o.indent; o.justify = !!o.justify;
+  o.indent = !!o.indent; o.justify = !!o.justify; o.spread = !!o.spread;
+  o.lineWidth = Number(o.lineWidth);
+  if (!LINE_WIDTHS.includes(o.lineWidth)) o.lineWidth = DEFAULTS.lineWidth;
+  o.ttsVoice = typeof o.ttsVoice === 'string' ? o.ttsVoice.slice(0, 300) : '';
   return o;
 }
 

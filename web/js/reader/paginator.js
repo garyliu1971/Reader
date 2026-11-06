@@ -2,8 +2,13 @@
 // brought into view with a transform. The reading position is a *text offset* (sum of DOM text-node lengths), never a
 // page index, so any viewport/typography change re-derives the page from the offset.
 //
-// Geometry: frame (width Pw, height Ph) clips; content is Tw = Pw - 2*mx wide and Ph high, with column-gap 2*mx, so the
-// column stride equals Pw. Showing page p = translateX(-p*Pw); margins are empty gap, so neighbouring columns never peek in.
+// Geometry: a page is one column of stride Pw (Pw = frame width, or half of it in two-page spread); content is
+// Tw = Pw - 2*mx wide and Ph high, with column-gap 2*mx, so the column stride equals Pw. Showing page p =
+// translateX(-p*Pw); margins are empty gap, so neighbouring columns never peek in. In spread mode (paged, frame wide
+// enough) `cols` = 2 and `page` is always the LEFT page of the spread (even), so the view never splits a spread.
+// Line length is capped (`maxLineEm`) by growing the side margins, which keeps wide windows readable.
+
+export const SPREAD_MIN_W = 1000;   // frame width (px) from which two pages are shown side by side
 
 const isWs = (c) => c === ' ' || c === '\n' || c === '\t' || c === '　' || c === ' ';
 
@@ -14,10 +19,15 @@ export class Paginator {
     this.mode = 'paged';
     this.page = 0;
     this.pageCount = 1;
-    this.pw = 0;
+    this.pw = 0;              // stride of one page (column)
+    this.fw = 0;              // frame width
     this.ph = 0;
     this.mx = 24;
+    this.cols = 1;            // pages shown at once (1, or 2 in spread)
+    this.spread = true;       // allow two-page spread when the frame is wide enough (paged mode)
+    this.maxLineEm = 40;      // text line cap in em (0 = unlimited)
     this.nodes = [];          // [{node, start}]
+    this.breaks = new Set();  // block-start offsets (see indexText)
     this.total = 0;           // text length of the section
     this.anchor = 0;          // authoritative reading offset (survives relayout)
     this.cleanup = null;
@@ -45,10 +55,15 @@ export class Paginator {
 
   indexText() {
     this.nodes = [];
+    this.breaks = new Set();   // offsets where a new block (paragraph, heading, list item...) starts
     let n = 0;
+    let prevBlock = null;
     const w = document.createTreeWalker(this.content, NodeFilter.SHOW_TEXT);
     while (w.nextNode()) {
       const node = w.currentNode;
+      const block = node.parentElement && node.parentElement.closest('p,div,h1,h2,h3,h4,h5,h6,li,blockquote,pre,tr,figcaption,td,th');
+      if (prevBlock !== null && block !== prevBlock && node.nodeValue.trim()) this.breaks.add(n);
+      if (node.nodeValue.trim()) prevBlock = block;
       this.nodes.push({ node, start: n });
       n += node.nodeValue.length;
     }
@@ -66,12 +81,23 @@ export class Paginator {
 
   // ------------------------------------------------------------------ geometry
   measure() {
-    this.pw = Math.max(1, Math.floor(this.frame.clientWidth));
+    this.fw = Math.max(1, Math.floor(this.frame.clientWidth));
     this.ph = Math.max(1, Math.floor(this.frame.clientHeight));
+    this.cols = this.mode === 'paged' && this.spread && this.fw >= SPREAD_MIN_W ? 2 : 1;
+    this.pw = Math.max(1, Math.floor(this.fw / this.cols));
     const minText = 120;
-    const want = parseFloat(getComputedStyle(this.frame).getPropertyValue('--mx')) || 24;
-    this.mx = Math.max(6, Math.min(want, Math.floor((this.pw - minText) / 2)));
+    const cs = getComputedStyle(this.frame);
+    const want = parseFloat(cs.getPropertyValue('--mx')) || 24;
+    let mx = Math.max(6, Math.min(want, Math.floor((this.pw - minText) / 2)));
+    if (this.maxLineEm > 0) {
+      const maxTw = Math.round(this.maxLineEm * (parseFloat(cs.getPropertyValue('--fs')) || 19));
+      if (this.pw - 2 * mx > maxTw) mx = Math.floor((this.pw - maxTw) / 2);
+    }
+    this.mx = mx;
   }
+
+  /** first page of the spread that contains page p */
+  alignPage(p) { return Math.floor(p / this.cols) * this.cols; }
 
   applyGeometry() {
     const c = this.content;
@@ -101,7 +127,7 @@ export class Paginator {
     if (this.mode === 'paged') {
       const sw = this.content.scrollWidth;
       this.pageCount = Math.max(1, Math.round((sw + 2 * this.mx) / this.pw));
-      this.page = Math.min(this.pageCount - 1, Math.max(0, this.pageOfOffset(this.anchor)));
+      this.page = this.alignPage(Math.min(this.pageCount - 1, Math.max(0, this.pageOfOffset(this.anchor))));
       this.showPage(false);
     } else {
       this.pageCount = 1;
@@ -213,7 +239,7 @@ export class Paginator {
   }
 
   setPage(p, { animate = true, notify = true } = {}) {
-    this.page = Math.max(0, Math.min(this.pageCount - 1, p));
+    this.page = this.alignPage(Math.max(0, Math.min(this.pageCount - 1, p)));
     this.showPage(animate);
     this.anchor = this.mode === 'paged' ? this.offsetAtPage(this.page) : this.anchor;
     if (notify) this.emit('page');
@@ -227,8 +253,8 @@ export class Paginator {
       f.scrollBy({ top: f.clientHeight * 0.9, behavior: 'smooth' });
       return 'moved';
     }
-    if (this.page >= this.pageCount - 1) return 'end';
-    this.setPage(this.page + 1);
+    if (this.page + this.cols >= this.pageCount) return 'end';
+    this.setPage(this.page + this.cols);
     return 'moved';
   }
 
@@ -241,14 +267,14 @@ export class Paginator {
       return 'moved';
     }
     if (this.page <= 0) return 'start';
-    this.setPage(this.page - 1);
+    this.setPage(this.page - this.cols);
     return 'moved';
   }
 
   gotoOffset(offset, { animate = false } = {}) {
     this.anchor = Math.max(0, Math.min(offset, this.total));
     if (this.mode === 'paged') {
-      this.page = Math.min(this.pageCount - 1, this.pageOfOffset(this.anchor));
+      this.page = this.alignPage(Math.min(this.pageCount - 1, this.pageOfOffset(this.anchor)));
       this.showPage(animate);
     } else this.scrollToOffset(this.anchor);
     this.emit('page');
@@ -291,7 +317,7 @@ export class Paginator {
       return [s, Math.max(s, e)];
     }
     const s = this.offsetAtPage(this.page);
-    const e = this.page + 1 >= this.pageCount ? this.total : this.offsetAtPage(this.page + 1);
+    const e = this.page + this.cols >= this.pageCount ? this.total : this.offsetAtPage(this.page + this.cols);
     return [s, e];
   }
 

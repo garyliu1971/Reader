@@ -109,11 +109,11 @@ await page.screenshot({ path: SHOTS + '/search-hit.png' });
 
 // ---- bookmarks
 await page.keyboard.press('b'); await wait(500);
-ok((await page.getAttribute('.topbar button[aria-pressed]', 'aria-pressed')) === 'true', 'bookmark added on this page');
+ok((await page.getAttribute('.topbar button[aria-pressed][aria-label*="书签"]', 'aria-pressed')) === 'true', 'bookmark added on this page');
 await page.keyboard.press('ArrowRight'); await wait(400);
-ok((await page.getAttribute('.topbar button[aria-pressed]', 'aria-pressed')) === 'false', 'next page has no bookmark');
+ok((await page.getAttribute('.topbar button[aria-pressed][aria-label*="书签"]', 'aria-pressed')) === 'false', 'next page has no bookmark');
 await page.keyboard.press('ArrowLeft'); await wait(400);
-ok((await page.getAttribute('.topbar button[aria-pressed]', 'aria-pressed')) === 'true', 'bookmark shows again on return');
+ok((await page.getAttribute('.topbar button[aria-pressed][aria-label*="书签"]', 'aria-pressed')) === 'true', 'bookmark shows again on return');
 
 // ---- dark theme: the page itself
 await page.evaluate(() => window.__pyreader.reader.setSetting('theme', 'dark')); await wait(300);

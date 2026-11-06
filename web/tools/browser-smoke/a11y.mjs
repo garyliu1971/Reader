@@ -9,6 +9,12 @@ const run = async (page, label) => {
 };
 for (const scheme of ['light', 'dark']) {
   const { browser, page, logs } = await launch({ width: 390, height: 780, scheme });
+  // fake speechSynthesis whose utterances never finish, so the read-aloud bar stays up for scanning
+  await page.addInitScript(() => {
+    class U { constructor(t) { this.text = t; } }
+    Object.defineProperty(window, 'speechSynthesis', { value: { getVoices: () => [], speak() {}, cancel() {}, pause() {}, resume() {}, addEventListener() {}, removeEventListener() {} }, configurable: true });
+    window.SpeechSynthesisUtterance = U;
+  });
   await page.goto(URL0);
   await page.waitForSelector('.shelf-head');
   await page.setInputFiles('input[type=file]', [BOOKS + '/sample.epub', BOOKS + '/notes.md']);
@@ -21,5 +27,10 @@ for (const scheme of ['light', 'dark']) {
   await run(page, `reader ${scheme} (bars on)`);
   await page.evaluate(() => window.__pyreader.reader.openSettings()); await wait(500);
   await run(page, `settings sheet ${scheme}`);
+  await page.keyboard.press('Escape'); await wait(300);
+  await page.evaluate(() => window.__pyreader.reader.setBars(true));
+  await page.keyboard.press('r'); await wait(500);
+  console.log('tts bar visible:', await page.evaluate(() => { const b = document.querySelector('.tts-bar'); return !!b && getComputedStyle(b).display !== 'none'; }));
+  await run(page, `reading, tts bar on ${scheme}`);
   await browser.close();
 }
