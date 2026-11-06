@@ -288,6 +288,7 @@ export class ReaderView {
         await this.showSection(s, a && a.s === s ? { anchor: a } : { start: true });
       }
       this.quiet = false;
+      this._restoredTop = this.pg.mode === 'scroll' ? this.frame.scrollTop : null;   // the scroll event the restore above queued is not reading
       if (seq !== this.seq) return;
       this.loading.hidden = true;
       this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
@@ -679,7 +680,13 @@ export class ReaderView {
 
   onScroll() {
     if (this._scrollT) clearTimeout(this._scrollT);
-    this._scrollT = setTimeout(() => this.pg.syncAnchorFromScroll(), 120);
+    this._scrollT = setTimeout(() => {
+      if (this._restoredTop != null) {
+        if (Math.abs(this.frame.scrollTop - this._restoredTop) < 1) return;   // still where open() put it
+        this._restoredTop = null;
+      }
+      this.pg.syncAnchorFromScroll();
+    }, 120);
   }
 
   markDirty() { if (this.quiet) return; this.dirty = true; this.saveSoon(); }

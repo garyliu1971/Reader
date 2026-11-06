@@ -125,22 +125,32 @@ export async function coverUrl(id) {
 
 export async function removeBook(id) { await deleteBookData(id); }
 
+// Read-modify-write of a books row (touchRead, saveProgress) runs one at a time so neither overwrites the other's fields.
+let rowChain = Promise.resolve();
+function updateRow(fn) {
+  const run = rowChain.then(fn);
+  rowChain = run.catch(() => {});
+  return run;
+}
+
 /**
  * The book was kept open long enough to count as read (see DWELL_MS). `at` (ms) should be on the same clock as saved
  * progress (server-corrected), see reader.js; it decides what "continue reading" offers. Local only, never synced.
  * Re-reads the row: the reader's `meta` is old by now and saveProgress may have updated percent/lastRead meanwhile.
  */
-export async function touchRead(id, at = Date.now()) {
+export const touchRead = (id, at = Date.now()) => updateRow(async () => {
   const meta = await db.get('books', id);
   if (meta && at > (meta.readAt || 0)) { meta.readAt = at; await db.put('books', meta); }
-}
+});
 
 // ---- progress (local, per book)
 export const getProgress = (bid) => db.get('progress', bid);
 export async function saveProgress(rec) {
   await db.put('progress', rec);
-  const meta = await db.get('books', rec.bid);
-  if (meta) { meta.percent = rec.percent; if (rec.updated * 1000 > (meta.lastRead || 0)) meta.lastRead = rec.updated * 1000; await db.put('books', meta); }
+  await updateRow(async () => {
+    const meta = await db.get('books', rec.bid);
+    if (meta) { meta.percent = rec.percent; if (rec.updated * 1000 > (meta.lastRead || 0)) meta.lastRead = rec.updated * 1000; await db.put('books', meta); }
+  });
 }
 
 // ---- bookmarks (local only; Qt never syncs bookmarks.json, so neither do we)

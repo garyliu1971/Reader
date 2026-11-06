@@ -49,6 +49,11 @@ await page.waitForSelector('.content p', { timeout: 20000 }); await wait(900);
 const after = await pos();
 ok(after.id === before.id && after.s === before.s && Math.abs(after.anchor - before.anchor) <= 3, 'click resumes the same book at the saved position', `${before.anchor} vs ${after.anchor}`);
 
+// ... and merely reopening it (paged) does not re-stamp it either
+const lrBefore = (await rows())['long'].lastRead;
+await wait(2000);
+ok((await rows())['long'].lastRead === lrBefore, 'paged: reopening a read book leaves lastRead untouched', `${lrBefore} vs ${(await rows())['long'].lastRead}`);
+
 // ---- merely opening another book (no page turn, short stay) must NOT take over the card
 await toShelf();
 await openBook('测试之书'); await wait(1500);
@@ -96,6 +101,33 @@ await toShelf();
 c = await cont();
 ok(fin.pct >= 97, 'epub reached the end', `pct=${fin.pct.toFixed(1)}`);
 ok(c && c.title.includes('long'), 'finished book is skipped, card falls back to the other book', c && c.title);
+
+// ---- scroll mode: restoring a saved offset queues a scroll event; it must not count as reading
+await page.evaluate(() => window.__pyreader.reader.setSetting('mode', 'scroll')); await wait(600);
+await openBook('long');
+await page.evaluate(() => { window.__pyreader.reader.pg.frame.scrollTop = 3000; }); await wait(1800);
+await page.evaluate(() => window.__pyreader.reader.saveNow()); await wait(500);
+const scrolled = await page.evaluate(() => window.__pyreader.reader.pg.frame.scrollTop);
+await toShelf();
+await openBook('测试之书');
+await page.evaluate(() => window.__pyreader.reader.seekPercent(50)); await wait(1800);
+await page.evaluate(() => window.__pyreader.reader.saveNow()); await wait(500);
+await toShelf();
+const lrScroll = (await rows())['long'];
+ok(scrolled > 1000 && (await cont()).title.includes('测试之书'), 'scroll mode setup: long scrolled, the other book is the card', `scrollTop=${scrolled}`);
+await openBook('long');
+const restored = await page.evaluate(() => window.__pyreader.reader.pg.frame.scrollTop);
+await wait(2500);
+await toShelf();
+const lrScroll2 = (await rows())['long'];
+ok(restored > 1000, 'scroll mode: saved offset restored on reopen', `scrollTop=${restored}`);
+ok(lrScroll2.lastRead === lrScroll.lastRead && lrScroll2.percent === lrScroll.percent, 'scroll mode: reopening without reading leaves lastRead untouched', `${lrScroll.lastRead} vs ${lrScroll2.lastRead}`);
+ok((await cont()).title.includes('测试之书'), 'scroll mode: reopened-unread book does not displace the card');
+await openBook('long');   // real scrolling afterwards still saves
+await page.evaluate(() => { window.__pyreader.reader.pg.frame.scrollTop += 800; }); await wait(1800);
+ok((await rows())['long'].lastRead > lrScroll.lastRead, 'scroll mode: actually scrolling after reopening still saves progress');
+await toShelf();
+await page.evaluate(() => window.__pyreader.reader.setSetting('mode', 'paged')); await wait(400);
 
 // ---- staying open past the dwell threshold counts as reading even without a page turn
 await toShelf();
