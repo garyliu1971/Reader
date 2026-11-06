@@ -6,9 +6,10 @@ import { Paginator } from './paginator.js';
 import { TtsReader, pickVoice } from './tts.js';
 import { Translate } from './translate.js';
 import { kvGet, kvSet } from '../store/db.js';
-import { openStored, touchOpened, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
+import { openStored, touchRead, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
+import { DWELL_MS } from '../core/recent.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
 const TAP_ZONE = 0.3;
@@ -290,7 +291,7 @@ export class ReaderView {
       if (seq !== this.seq) return;
       this.loading.hidden = true;
       this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
-      touchOpened(meta, Math.round(stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0) * 1000)).catch(() => {});
+      this.armDwell(meta.id);
       this.checkRemote(saved);
       this.refreshMarkButton();
       this.maybeShowHint();
@@ -301,7 +302,17 @@ export class ReaderView {
     }
   }
 
+  /** Opening alone is not reading: the book only becomes "continue reading" once progress moves or it stays open (and visible) for DWELL_MS */
+  armDwell(id) {
+    clearTimeout(this._dwellT);
+    this._dwellT = setTimeout(() => {
+      if (!this.active || !this.meta || this.meta.id !== id || document.visibilityState === 'hidden') return;
+      touchRead(id, Math.round(stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0) * 1000)).catch(() => {});
+    }, DWELL_MS);
+  }
+
   closeBook() {
+    clearTimeout(this._dwellT);
     this.hideTr();
     if (this.tts) this.tts.stop();
     if (this.book) { try { this.book.close(); } catch { /* ignore */ } }

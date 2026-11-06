@@ -47,7 +47,7 @@ export async function importBlob(file, { name = file.name, remote = null, onStat
   if (existing && (await db.get('files', id))) return { meta: existing, duplicate: true };
 
   const meta = {
-    id, name, format, size: file.size, title: stem(name), author: '', addedAt: Date.now(), openedAt: 0, percent: 0,
+    id, name, format, size: file.size, title: stem(name), author: '', addedAt: Date.now(), readAt: 0, percent: 0,
     lens: [], headings: null, pageCount: 0, source: remote ? 'remote' : 'local', rel: remote ? remote.rel : null,
     remoteSize: remote ? remote.size : 0, remoteMtime: remote ? remote.mtime : 0,
   };
@@ -125,8 +125,15 @@ export async function coverUrl(id) {
 
 export async function removeBook(id) { await deleteBookData(id); }
 
-/** `at` (ms) should be on the same clock as saved progress (server-corrected), see reader.js; it decides what "continue reading" offers */
-export async function touchOpened(meta, at = Date.now()) { meta.openedAt = at; await db.put('books', meta); }
+/**
+ * The book was kept open long enough to count as read (see DWELL_MS). `at` (ms) should be on the same clock as saved
+ * progress (server-corrected), see reader.js; it decides what "continue reading" offers. Local only, never synced.
+ * Re-reads the row: the reader's `meta` is old by now and saveProgress may have updated percent/lastRead meanwhile.
+ */
+export async function touchRead(id, at = Date.now()) {
+  const meta = await db.get('books', id);
+  if (meta && at > (meta.readAt || 0)) { meta.readAt = at; await db.put('books', meta); }
+}
 
 // ---- progress (local, per book)
 export const getProgress = (bid) => db.get('progress', bid);

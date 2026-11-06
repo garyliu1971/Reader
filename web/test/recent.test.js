@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { continueCandidate, ago, DONE_PERCENT } from '../js/core/recent.js';
+import { continueCandidate, touchedAt, ago, DONE_PERCENT, DWELL_MS } from '../js/core/recent.js';
 
 const e = (id, touched, percent, extra = {}) => ({ id, touched, percent, ...extra });
 
@@ -19,8 +19,35 @@ test('finished, hidden, uploading and never-touched books are skipped', () => {
   assert.equal(continueCandidate([]), null);
 });
 
-test('a just-opened book at 0% can be continued (opened but not yet read)', () => {
+test('a book at 0% that was read (dwell stamp) can be continued', () => {
   assert.equal(continueCandidate([e('fresh', 50, 0)]).id, 'fresh');
+});
+
+test('touchedAt: newest of saved progress, dwell stamp and remote progress', () => {
+  assert.equal(touchedAt({ lastRead: 100, readAt: 300 }, 200), 300);
+  assert.equal(touchedAt({ lastRead: 100, readAt: 0 }, 200), 200);
+  assert.equal(touchedAt({ lastRead: 400, readAt: 300 }, 0), 400);
+  assert.equal(touchedAt({}, 0), 0);
+  assert.equal(touchedAt({ lastRead: undefined, readAt: undefined }), 0);
+});
+
+test('merely opening a book (legacy openedAt, nothing read) is never touched', () => {
+  const b = { lastRead: 0, readAt: 0, openedAt: 9_000 };   // openedAt: stamped on every open by older builds
+  assert.equal(touchedAt(b, 0), 0);
+  const real = { lastRead: 1_000, readAt: 0 };
+  const entries = [e('read', touchedAt(real, 0), 40), e('openedOnly', touchedAt(b, 0), 0)];
+  assert.equal(continueCandidate(entries).id, 'read', 'a later open must not displace the real last-read book');
+  assert.equal(continueCandidate([entries[1]]), null, 'a shelf where nothing was read has no continue card');
+});
+
+test('a newer remote progress still wins over a local dwell stamp, an older one does not', () => {
+  const local = { lastRead: 1_000, readAt: 5_000 };
+  assert.equal(touchedAt(local, 7_000), 7_000);
+  assert.equal(touchedAt(local, 2_000), 5_000);
+});
+
+test('dwell threshold is a short but non-trivial time', () => {
+  assert.ok(DWELL_MS >= 10_000 && DWELL_MS <= 120_000);
 });
 
 test('ties keep the first entry', () => {
