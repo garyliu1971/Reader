@@ -124,9 +124,9 @@ export class TtsReader {
       const r = await this._say(text.slice(a, b), token);
       if (token !== this.token) return;
       if (r === 'nostart') {
-        // speak() was accepted but the engine never began: typically no TTS engine/voice on this device (mobile browsers)
+        // speak() was accepted but the engine never began: e.g. Android Edge (speechSynthesis unusable) or a device without a TTS engine
         this.stop();
-        this.host.failed('朗读没有声音输出：此设备/浏览器没有可用的语音引擎（或没有中文语音）。请在系统设置里安装或启用“文字转语音”引擎，或改用电脑浏览器。');
+        this.host.failed('朗读没有声音输出：此浏览器的朗读功能不可用（例如手机版 Edge）。请换用系统自带浏览器（如华为浏览器）或电脑浏览器；若仍无声，请检查系统“文字转语音”引擎。');
         return;
       }
       if (r === 'error') {
