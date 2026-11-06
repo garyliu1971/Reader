@@ -137,3 +137,13 @@ test('restart while idle does nothing', () => {
   r.restart(0);
   assert.equal(synth.spoken.length, 0);
 });
+
+test('engine that accepts speak() but never starts: stops with a clear message', async () => {
+  const { r, log } = mkReader(['甲。乙。丙。'], { autoEnd: false });
+  r.startTimeoutMs = 30;
+  r.start(0);
+  await tick(120);
+  assert.equal(r.state, 'idle');
+  assert.equal(log.failed.length, 1);
+  assert.match(log.failed[0], /没有声音输出/);
+});

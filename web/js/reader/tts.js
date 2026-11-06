@@ -71,7 +71,8 @@ export class TtsReader {
    * @param host   { text(): string, breaks(): Set<number>|null, reveal(a,b), nextSection(): Promise<boolean>,
    *                 changed(state), finished(), failed(msg), settings(): {ttsRate, ttsVoice} }
    */
-  constructor({ synth, Utter, host }) {
+  constructor({ synth, Utter, host, startTimeoutMs = 6000 }) {
+    this.startTimeoutMs = startTimeoutMs;
     this.synth = synth;
     this.Utter = Utter;
     this.host = host;
@@ -122,6 +123,12 @@ export class TtsReader {
       this.host.reveal(a, b);
       const r = await this._say(text.slice(a, b), token);
       if (token !== this.token) return;
+      if (r === 'nostart') {
+        // speak() was accepted but the engine never began: typically no TTS engine/voice on this device (mobile browsers)
+        this.stop();
+        this.host.failed('朗读没有声音输出：此设备/浏览器没有可用的语音引擎（或没有中文语音）。请在系统设置里安装或启用“文字转语音”引擎，或改用电脑浏览器。');
+        return;
+      }
       if (r === 'error') {
         if (++failures >= 3) { this.stop(); this.host.failed('朗读失败：浏览器没有可用的语音，或语音服务无响应。'); return; }
       } else failures = 0;
@@ -140,9 +147,16 @@ export class TtsReader {
       u.lang = v ? v.lang : lang;
       if (v) u.voice = v;
       u.rate = cfg.ttsRate || 1;
-      u.onend = () => resolve('end');
-      u.onerror = (e) => resolve(e && (e.error === 'canceled' || e.error === 'interrupted') ? 'cancel' : 'error');
+      let timer = null;
+      const done = (r) => { clearTimeout(timer); resolve(r); };
+      u.onstart = () => clearTimeout(timer);
+      u.onend = () => done('end');
+      u.onerror = (e) => done(e && (e.error === 'canceled' || e.error === 'interrupted') ? 'cancel' : 'error');
       if (token !== this.token) { resolve('cancel'); return; }
+      if (this.startTimeoutMs > 0) timer = setTimeout(() => {
+        try { this.synth.cancel(); } catch { /* ignore */ }
+        resolve('nostart');
+      }, this.startTimeoutMs);
       this.synth.speak(u);
     });
   }

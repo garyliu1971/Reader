@@ -2,7 +2,7 @@
 // Only requests under this worker's own directory are handled. Everything else (cross-origin WebDAV, or a WebDAV
 // server on the SAME origin: /library, /users, ...) is never touched, so authenticated responses and progress JSON
 // are never cached or served stale. Bump CACHE when shipping a new version.
-const CACHE = 'pyreader-web-v7';
+const CACHE = 'pyreader-web-v8';
 const SCOPE_PATH = new URL('./', self.location).pathname;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
