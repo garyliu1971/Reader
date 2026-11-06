@@ -43,6 +43,13 @@ for (const scheme of ['light', 'dark']) {
   await page.evaluate(() => window.__pyreader.reader.openSettings()); await wait(500);
   await run(page, `settings sheet ${scheme}`);
   await page.keyboard.press('Escape'); await wait(300);
+  // in-book search bar with an active hit (two-row phone layout)
+  await page.keyboard.press('/'); await wait(400);
+  await page.fill('.find-input', '一'); await wait(1200);
+  console.log('find bar:', await page.evaluate(() => { const r = window.__pyreader.reader; return `${r.find.count.textContent} active=${!!CSS.highlights.get('search-active')}`; }));
+  await run(page, `search bar ${scheme}`);
+  await page.screenshot({ path: SHOTS + `/a11y-search-${scheme}.png` });
+  await page.keyboard.press('Escape'); await wait(300);
   await page.evaluate(() => window.__pyreader.reader.setBars(true));
   await page.keyboard.press('r'); await wait(500);
   console.log('tts bar visible:', await page.evaluate(() => { const b = document.querySelector('.tts-bar'); return !!b && getComputedStyle(b).display !== 'none'; }));
