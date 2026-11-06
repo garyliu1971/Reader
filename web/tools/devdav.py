@@ -43,6 +43,13 @@ class CorsHandler(fakedav.Handler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_GET(self):
+        if self.path.split("?")[0] == "/__debug/log":   # test hook: request header log (methods + the headers the web app must send)
+            import json
+            return self._send(200, json.dumps({"headers": type(self).req_headers, "methods": type(self).log}).encode(),
+                              {"Content-Type": "application/json"})
+        return super().do_GET()
+
     def do_OPTIONS(self):  # preflight: must succeed without credentials
         self.send_response(204)
         self._cors()
