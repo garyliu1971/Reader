@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PyReader">
+  <rect width="512" height="512" rx="112" fill="#2f6fdd"/>
+  <path d="M256 154 133 123 102 138v221l31-15 123 31z" fill="#fff"/>
+  <path d="M260 154 379 123 410 138v221l-31-15-119 31z" fill="#fff"/>
+</svg>
