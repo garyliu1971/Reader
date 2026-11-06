@@ -17,6 +17,7 @@ from .markdown import (_line_disp_to_src, _line_src_to_disp, _md_heading_font, _
 class PageView(QWidget):
     pageChanged = Signal(int)          # 左页的全局字符偏移
     needChapter = Signal(int, bool)    # (相对章序号 ±1, 是否跳到末页)
+    sizeChanged = Signal()             # 控件自身尺寸变了（窗口缩放 / 目录书签等 dock 开关都会触发）
 
     def __init__(self):
         super().__init__()
@@ -95,6 +96,10 @@ class PageView(QWidget):
         self.header_color = colors["header"]
         self.pageno_color = colors["pageno"]
         self.update()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.sizeChanged.emit()
 
     def pagination_params(self):
         """把当前布局转成 LazyPager 分页所需的参数（含由控件尺寸推算的页宽高）。"""

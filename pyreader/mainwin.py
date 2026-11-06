@@ -1,3 +1,4 @@
+import bisect
 import os
 import re
 import threading
@@ -11,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QListWidget, 
                                QFileDialog, QMessageBox, QProgressBar, QSlider, QDockWidget,
                                QLineEdit, QToolButton, QWidgetAction, QHBoxLayout, QFrame,
                                QTabWidget, QPushButton, QSizePolicy, QSplitter, QStackedWidget)
-from .config import (view_count, view_of_page, CONFIG_PATH, BOOKMARKS_PATH, OUTER, MARGIN_X, MARGIN_Y, GUTTER,
+from .config import (view_count, view_of_page, first_page_of_view, CONFIG_PATH, BOOKMARKS_PATH, OUTER, MARGIN_X, MARGIN_Y, GUTTER,
                      load_env_defaults,
                      LINE_SPACING, PARA_SPACING, _HAS_MULTIMEDIA,
                      load_json, save_json, default_cjk_font, clamp_trans_scale, bilingual_html, TRANS_SCALE_DEFAULT, THEMES, DEFAULT_THEME, DEFAULT_CONFIG,
@@ -226,7 +227,9 @@ class MainWindow(QMainWindow):
 
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True); self._resize_timer.setInterval(200)
-        self._resize_timer.timeout.connect(self.reload_current)
+        self._resize_timer.timeout.connect(self._relayout_if_page_size_changed)
+        self._anchor_off = None           # 阅读锚点：重排不改变它，避免多次重排后位置单向漂移
+        self.view.sizeChanged.connect(self._on_view_resized)
 
         # WebDAV 进度同步：所有网络都在后台线程，结果经 Signal 回主线程
         self.sync = SyncWorker(self)
@@ -723,11 +726,15 @@ class MainWindow(QMainWindow):
             return
         self._save_progress(force=False)
 
+    def _on_page_changed(self, off):
+        self._anchor_off = off
+        self._update_status()
+
     def _build_menus(self):
         self.toc.itemClicked.connect(lambda it: self.goto_offset(it.data(Qt.ItemDataRole.UserRole)))
         self.bm_list.itemClicked.connect(lambda it: self.goto_offset(it.data(Qt.ItemDataRole.UserRole)))
         self.view.needChapter.connect(self._need_chapter)
-        self.view.pageChanged.connect(lambda _: self._update_status())
+        self.view.pageChanged.connect(self._on_page_changed)
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._show_ctx_menu)
 
@@ -1024,10 +1031,13 @@ class MainWindow(QMainWindow):
             return
         ci = self.pager.chapter_index_at(offset)
         self.load_chapter(ci)
-        for p in self.pager.pages_of(ci):
-            if p.start <= offset < p.end:
-                self.view.spread = view_of_page(p.index, self.view.ppv)
-                break
+        self._anchor_off = offset
+        # 取起点 <= offset 的最后一页：旧页首若落在空行/段间，也不会退回章首
+        pages = self.pager.pages_of(ci)
+        starts = [p.start for p in pages]
+        k = bisect.bisect_right(starts, offset) - 1
+        if k >= 0:
+            self.view.spread = view_of_page(pages[k].index, self.view.ppv)
         self.view.update()
 
     def _need_chapter(self, delta, goto_end):
@@ -1049,7 +1059,7 @@ class MainWindow(QMainWindow):
         self.single_act.setChecked(single)
         if single == self.view.single_page:
             return
-        off = self.view.left_page_offset()     # 必须在切换前取（spread 含义随每屏页数变化）
+        off = self._current_anchor()           # 必须在切换前取（spread 含义随每屏页数变化）
         self.view.set_single_page(single)
         self.cfg["single_page"] = single
         save_json(CONFIG_PATH, self.cfg)
@@ -1059,19 +1069,43 @@ class MainWindow(QMainWindow):
         if not self.pager:
             return
         if off is None:
-            off = self.view.left_page_offset()
+            off = self._current_anchor()
         self.view.set_layout(self._make_layout())
         self.pager.set_params(self.view.pagination_params())
         self.load_chapter(self.cur_chapter)
         self.goto_offset(off)
 
+    def _current_anchor(self):
+        """重排用的阅读位置。优先用记住的锚点（只要它还在当前屏内），否则退回左页页首。"""
+        v = self.view
+        off = v.left_page_offset()
+        a = self._anchor_off
+        i = first_page_of_view(v.spread, v.ppv)
+        if a is not None and v.pages and i < len(v.pages):
+            last = v.pages[min(i + v.ppv, len(v.pages)) - 1]
+            if v.pages[i].start <= a < max(last.end, v.pages[i].start + 1):
+                return a
+        return off
+
+    def _on_view_resized(self):
+        """阅读页尺寸变化（含目录/书签/AI/双语 dock 开关、拖分隔条）：防抖后按新页宽重排。"""
+        if not self.pager:
+            return
+        if not self._reader_visible():
+            self._resized_on_shelf = True       # 隐藏的阅读页拿不到新尺寸：回到阅读页再重排
+        else:
+            self._resize_timer.start()          # 200ms 内只重排一次
+
+    def _relayout_if_page_size_changed(self):
+        if not self.pager:
+            return
+        if self.view.pagination_params()["page_size"] == self.pager._params["page_size"]:
+            return                              # 页宽高没变（如单页模式宽度被夹住）：不必重排
+        self.reload_current()
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.pager:
-            if not self._reader_visible():
-                self._resized_on_shelf = True   # 隐藏的阅读页拿不到新尺寸：回到阅读页再重排
-            else:
-                self._resize_timer.start()      # 200ms 内只重排一次
+        self._on_view_resized()
 
     # ---- 目录 / 书签 ----
     def _build_toc(self):
