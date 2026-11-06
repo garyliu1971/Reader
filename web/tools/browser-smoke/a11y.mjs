@@ -14,6 +14,9 @@ for (const scheme of ['light', 'dark']) {
     class U { constructor(t) { this.text = t; } }
     Object.defineProperty(window, 'speechSynthesis', { value: { getVoices: () => [], speak() {}, cancel() {}, pause() {}, resume() {}, addEventListener() {}, removeEventListener() {} }, configurable: true });
     window.SpeechSynthesisUtterance = U;
+    // fake on-device Translator so the 翻译 button / popover can be scanned
+    window.Translator = { availability: async () => 'available', create: async () => ({ translate: async (t) => '【译】' + t }) };
+    window.LanguageDetector = { create: async () => ({ detect: async () => [{ detectedLanguage: 'en', confidence: 0.9 }] }) };
   });
   await page.goto(URL0);
   await page.waitForSelector('.shelf-head');
@@ -25,6 +28,18 @@ for (const scheme of ['light', 'dark']) {
   await page.waitForSelector('.content p'); await wait(800);
   await page.evaluate(() => window.__pyreader.reader.setBars(true)); await wait(400);
   await run(page, `reader ${scheme} (bars on)`);
+  // select text -> floating 翻译 button -> translation popover
+  await page.evaluate(() => window.__pyreader.reader.setBars(false)); await wait(300);
+  const sel = await page.evaluate(() => { const p = [...document.querySelectorAll('.content p')].find((x) => x.textContent.trim().length >= 5); if (!p) return ''; const r = document.createRange(); r.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(r); return r.toString(); });
+  await wait(600);
+  console.log('translate button visible:', await page.evaluate(() => { const b = document.querySelector('.tr-btn'); return !!b && !b.hidden; }), JSON.stringify(sel));
+  await run(page, `reader with translate button ${scheme}`);
+  await page.locator('.tr-btn').click(); await wait(500);
+  console.log('translate popover visible:', await page.evaluate(() => { const b = document.querySelector('.tr-pop'); return !!b && !b.hidden && /【译】/.test(b.textContent); }));
+  await page.screenshot({ path: SHOTS + `/a11y-translate-pop-${scheme}.png` });
+  await run(page, `reader with translate popover ${scheme}`);
+  await page.keyboard.press('Escape'); await wait(300);
+  await page.evaluate(() => window.__pyreader.reader.setBars(true)); await wait(300);
   await page.evaluate(() => window.__pyreader.reader.openSettings()); await wait(500);
   await run(page, `settings sheet ${scheme}`);
   await page.keyboard.press('Escape'); await wait(300);
