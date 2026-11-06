@@ -51,6 +51,8 @@ class CorsHandler(fakedav.Handler):
         return super().do_GET()
 
     def do_OPTIONS(self):  # preflight: must succeed without credentials
+        type(self).log.append(("OPTIONS", self.path))
+        type(self).req_headers.append(("OPTIONS", self.path, {k: self.headers.get(k) for k in ("Authorization", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers") if self.headers.get(k)}))
         self.send_response(204)
         self._cors()
         self.send_header("Access-Control-Allow-Methods", ALLOW_METHODS)

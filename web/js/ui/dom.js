@@ -37,6 +37,12 @@ export function toast(msg, { ms = 3200, action = null } = {}) {
   return t;
 }
 
+// Escape closes the topmost overlay whatever has focus (a disabled/removed button drops focus to <body>).
+const panelStack = [];
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && panelStack.length) { e.stopPropagation(); e.preventDefault(); panelStack[panelStack.length - 1].close(); }
+}, true);
+
 /**
  * Overlay panel (drawer or dialog). Opens on top of the page without touching the reading layout.
  * @returns {{el, close, body}}
@@ -51,12 +57,14 @@ export function openPanel({ title, side = 'dialog', content, onClose = null, lab
   const root = h('div', { class: `overlay-root side-${side}` }, scrim, panel);
   document.body.append(root);
   requestAnimationFrame(() => root.classList.add('open'));
-  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  root.addEventListener('keydown', onKey);
   let closed = false;
+  const entry = { close: () => close() };
+  panelStack.push(entry);
   function close() {
     if (closed) return;
     closed = true;
+    const i = panelStack.indexOf(entry);
+    if (i >= 0) panelStack.splice(i, 1);
     root.classList.remove('open');
     setTimeout(() => root.remove(), 180);
     if (opener && opener.focus) { try { opener.focus({ preventScroll: true }); } catch { /* ignore */ } }

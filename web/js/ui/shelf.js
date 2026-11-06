@@ -168,7 +168,7 @@ export class ShelfView {
       h('div', { class: 't', text: e.title }),
       e.author ? h('div', { class: 'a', text: e.author }) : null,
       h('div', { class: 'bar', 'aria-hidden': 'true' }, h('i', { style: `width:${pct}%` })),
-      h('div', { class: 'pct', text: e.cloud ? (e.uploading ? '上传中…' : `云端 · ${fmtSize(e.size)}${pct ? ` · ${pct.toFixed(0)}%` : ''}`) : `${pct.toFixed(pct && pct < 10 ? 1 : 0)}%${e.remoteNote ? ` · ${e.remoteNote}` : ''}`, title: e.remoteNote }));
+      h('div', { class: 'pct', text: e.cloud ? (e.uploading ? '上传中…' : `云端 · ${fmtSize(e.size)}${e.remoteNote ? ` · ${e.remoteNote}` : ''}`) : `${pct.toFixed(pct && pct < 10 ? 1 : 0)}%${e.remoteNote ? ` · ${e.remoteNote}` : ''}`, title: e.remoteNote }));
     const btn = h('div', { class: `book${e.cloud ? ' cloud' : ''}`, role: 'listitem' },
       h('button', { class: 'book-open', type: 'button', 'aria-label': `${e.cloud ? '下载并打开' : '打开'} ${e.title}，进度 ${pct.toFixed(0)}%`, disabled: !!e.uploading, onclick: () => this.openEntry(e) }, cover, meta),
     );

@@ -56,7 +56,7 @@ export async function importBlob(file, { name = file.name, remote = null, onStat
     const book = await openEpub(file);
     await book.scan((f) => onStatus(`解析 ${name}… ${Math.round(f * 100)}%`));
     meta.lens = book.lens;
-    meta.headings = book.sections.map((s) => s.heading || '');
+    Object.assign(meta, book.layoutData());   // docLens, headings, parts: lets us open without rescanning
     if (book.title) meta.title = book.title;
     meta.author = book.author;
     try { const c = await book.cover(); if (c) coverBlob = await makeThumb(c); } catch { /* generated tile instead */ }
@@ -94,13 +94,11 @@ export async function openStored(id) {
   let book;
   if (meta.format === 'epub') {
     book = await openEpub(blob);
-    if (meta.lens && meta.lens.length === book.sections.length) {
-      book.lens = meta.lens;
-      book.sections.forEach((s, i) => { s.heading = meta.headings ? meta.headings[i] : ''; });
-      book.finishTitles();
-    } else {
+    if (meta.docLens && meta.docLens.length === book.docs.length) book.layout(meta.docLens, meta.headings, meta.parts);
+    else {   // imported by an older build / changed file: rescan once
       await book.scan();
       meta.lens = book.lens;
+      Object.assign(meta, book.layoutData());
       await db.put('books', meta);
     }
   } else if (meta.format === 'txt') {

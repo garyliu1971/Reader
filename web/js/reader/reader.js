@@ -539,6 +539,7 @@ export class ReaderView {
   async curPageBookmark() {
     if (!this.meta || !this.book) return null;
     const marks = await getBookmarks(this.meta.id);
+    if (!marks.length) return null;   // skip the (layout-querying) page range when there is nothing to match
     if (this.pdf) return marks.find((m) => m.anchor.s === this.pdfPage) || null;
     const [a, b] = this.pg.pageRange();
     return marks.find((m) => m.anchor.s === this.s && m.anchor.o >= a && m.anchor.o < Math.max(b, a + 1)) || null;

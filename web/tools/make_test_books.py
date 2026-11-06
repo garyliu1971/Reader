@@ -32,6 +32,8 @@ def para(rng, n=6):
 
 def cn(n):
     d = "零一二三四五六七八九十"
+    if n >= 100:
+        return str(n)
     if n <= 10:
         return d[n]
     if n < 20:
@@ -39,12 +41,12 @@ def cn(n):
     return d[n // 10] + "十" + (d[n % 10] if n % 10 else "")
 
 
-def make_epub(path):
+def make_epub(path, n_chapters=12, paras=14):
     rng = random.Random(7)
     chapters = []
-    for i in range(1, 13):
+    for i in range(1, n_chapters + 1):
         body = [f"<h1>第{cn(i)}章 测试章节{i}</h1>"]
-        for k in range(14):
+        for k in range(paras):
             body.append(f"<p>{para(rng)}</p>")
             if k == 5 and i == 2:
                 body.append('<p><img src="images/pic.png" alt="插图"/></p>')
@@ -132,6 +134,8 @@ def make_pdf(path, pages=6):
 def main(outdir):
     os.makedirs(outdir, exist_ok=True)
     make_epub(os.path.join(outdir, "sample.epub"))
+    make_epub(os.path.join(outdir, "big.epub"), 300, 200)        # ~300 chapters, ~25 MB uncompressed
+    make_epub(os.path.join(outdir, "huge1.epub"), 1, 14000)      # one single 1.5M-char chapter (worst case for layout)
     rng = random.Random(11)
     t = make_txt(rng, 60, 40)
     open(os.path.join(outdir, "long.txt"), "w", encoding="utf-8", newline="").write(t)
