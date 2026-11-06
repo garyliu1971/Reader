@@ -15,6 +15,7 @@ export const DEFAULTS = {
   lineWidth: 40,            // max text line length in em (CJK: about this many characters); 0 = unlimited
   ttsRate: 1,               // read-aloud speed
   ttsVoice: '',             // SpeechSynthesisVoice.voiceURI; '' = best voice for the language
+  trTarget: 'zh',           // translate selected text into: zh | en (Chinese selections always go to English)
 };
 export const LINE_WIDTHS = [30, 40, 55, 0];
 export const LIMITS = { fontSize: [12, 40], lineHeight: [1.3, 2.6], margin: [8, 80], paraSpace: [0, 1.2], ttsRate: [0.5, 2.5] };
@@ -37,6 +38,7 @@ export function normalize(s) {
   o.indent = !!o.indent; o.justify = !!o.justify; o.spread = !!o.spread;
   o.lineWidth = Number(o.lineWidth);
   if (!LINE_WIDTHS.includes(o.lineWidth)) o.lineWidth = DEFAULTS.lineWidth;
+  if (!['zh', 'en'].includes(o.trTarget)) o.trTarget = 'zh';
   o.ttsVoice = typeof o.ttsVoice === 'string' ? o.ttsVoice.slice(0, 300) : '';
   return o;
 }
