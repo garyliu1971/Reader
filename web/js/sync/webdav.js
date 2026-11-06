@@ -98,7 +98,11 @@ export class DavClient {
         if (Number.isFinite(t)) this.skewMs = t - Date.now();
       }
       const ok = (resp.status >= 200 && resp.status < 300) || okCodes.includes(resp.status);
-      const cl = /^\d+$/.test((hdrs['content-length'] || '').trim()) ? parseInt(hdrs['content-length'], 10) : null;
+      // With Content-Encoding (gzip from Caddy/SFTPGo) Content-Length counts the compressed bytes while the browser hands
+      // us the decoded stream, so it cannot be compared with what we read. A truncated compressed stream errors in fetch
+      // itself; the maxBytes cap below still applies to the decoded size.
+      const encoded = !['', 'identity'].includes((hdrs['content-encoding'] || '').trim().toLowerCase());
+      const cl = !encoded && /^\d+$/.test((hdrs['content-length'] || '').trim()) ? parseInt(hdrs['content-length'], 10) : null;
       if (maxBytes !== null && cl !== null && cl > maxBytes) { ctl.abort(); throw new DavError(`${what}: response too large (${cl} > ${maxBytes})`); }
       if (!ok) {
         try { await resp.body?.cancel(); } catch { /* ignore */ }
