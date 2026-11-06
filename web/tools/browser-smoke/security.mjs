@@ -1,0 +1,40 @@
+import { launch, BOOKS, URL0, wait } from './lib.mjs';
+let fails = 0;
+const ok = (cond, msg, extra = '') => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${msg} ${extra}`); if (!cond) fails++; };
+const { browser, page, logs } = await launch();
+page.on('dialog', async (d) => { console.log('DIALOG!', d.message()); fails++; await d.dismiss(); });
+await page.goto(URL0);
+await page.waitForSelector('.shelf-head');
+
+const res = await page.evaluate(async () => {
+  const { richTextBook } = await import('./js/parse/textbooks.js');
+  const enc = (s) => new TextEncoder().encode(s);
+  const evil = `# T\n\n[click](javascript:alert(1)) [ok](https://example.com) [d](data:text/html;base64,PHNjcmlwdD4=) [j](JaVa\tScRiPt:alert(1))\n\n<script>alert(1)</script><img src=x onerror=alert(1)><iframe src="https://evil"></iframe><style>*{display:none}</style><form action=x><input name=a></form>\n\n<svg onload=alert(1)><script>1</script></svg><a href="  javascript:alert(2)">z</a> <a href="#frag" onclick="alert(3)">frag</a> ![i](https://track.example/p.png) ![d](data:image/png;base64,iVBORw0KGgo=)`;
+  const b = await richTextBook(enc(evil), 'md', 'x');
+  const { frag } = await b.loadSection(0);
+  const host = document.createElement('div');
+  host.append(frag);
+  const bad = host.querySelectorAll('script,style,iframe,object,embed,form,input,link,meta,svg').length;
+  const onattrs = [...host.querySelectorAll('*')].flatMap((e) => [...e.attributes].map((a) => a.name)).filter((n) => n.startsWith('on'));
+  const hrefs = [...host.querySelectorAll('a')].map((a) => a.getAttribute('data-href'));
+  const rawHref = host.querySelectorAll('a[href]').length;
+  const imgs = [...host.querySelectorAll('img')].map((i) => i.getAttribute('src') && i.getAttribute('src').slice(0, 20));
+  return { bad, onattrs, hrefs, rawHref, imgs, html: host.innerHTML.slice(0, 600) };
+});
+console.log(JSON.stringify(res));
+ok(res.bad === 0, 'no script/style/iframe/form/svg survives sanitizing');
+ok(res.onattrs.length === 0, 'no on* attributes survive');
+ok(res.rawHref === 0, 'no live href attribute (links go through data-href + handler)');
+ok(res.hrefs.every((h) => h === null || /^(https?:|#)/.test(h)), 'only http(s)/anchor links kept', JSON.stringify(res.hrefs));
+ok(res.imgs.length === 1 && res.imgs[0].startsWith('data:image/png'), 'remote images dropped, data: images kept', JSON.stringify(res.imgs));
+
+await page.setInputFiles('input[type=file]', [BOOKS + '/page.html', BOOKS + '/notes.md']);
+await page.waitForFunction(() => document.querySelectorAll('.book').length >= 2, null, { timeout: 20000 });
+await page.locator('.book .t', { hasText: '页面' }).first().click();
+await page.waitForSelector('.content h1'); await wait(500);
+const html = await page.evaluate(() => document.querySelector('.content').innerHTML);
+ok(!/iframe|onclick/i.test(html), 'imported HTML page rendered without iframe/onclick', html.slice(0, 120));
+console.log('logs', logs);
+console.log(fails ? `\n${fails} FAILURES` : '\nALL OK');
+await browser.close();
+process.exit(fails ? 1 : 0);

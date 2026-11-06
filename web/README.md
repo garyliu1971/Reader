@@ -17,6 +17,7 @@ node --test web/test                              # 单元 + 同步互操作测�
 * Service Worker / 安装需要 `https://` 或 `localhost`/`127.0.0.1`。
 * 生成测试书：`python web/tools/make_test_books.py OUTDIR`（EPUB/TXT/GBK TXT/Markdown/HTML/PDF/大文件）。
 * 本地 WebDAV（带 CORS）：`python web/tools/devdav.py --auth user:pass --seed 某目录`。它复用 `tests/fakedav.py`（Qt 测试用的假服务器，只读引用），只在 `web/tools/` 里加了一层 CORS；监听 127.0.0.1，输出 `READY http://127.0.0.1:端口/dav`。
+* 真实浏览器烟测（可选，不属于 `node --test`）：在 `web/tools/browser-smoke/` 里 `npm i playwright-core axe-core --no-save`，先生成测试书（见上）并启动静态服务器，再 `node reader.mjs`（阅读/重排/目录/搜索/书签/主题/GBK TXT）、`formats-touch-large.mjs`（13 MB TXT、PDF、触摸点击区/滑动、选择复制）、`sync-e2e.mjs`（真实 CORS 预检、下载、进度推送与不回退、对等设备文件、无 DELETE、离线 PWA）、`big-epub-upload.mjs`（大 EPUB、拖拽导入、上传不覆盖）、`security.mjs`（净化）、`a11y.mjs`（axe-core）、`pinch.mjs`。环境变量：`SMOKE_TMP`（默认系统临时目录/pyreader-web-smoke）、`CHROME_PATH`、`APP_URL`。
 * 重新生成与 Python 实现对拍的黄金数据：`python web/tools/gen_golden.py`；重新生成图标：`python web/tools/gen_icons.py`。
 
 ## 部署（静态托管）

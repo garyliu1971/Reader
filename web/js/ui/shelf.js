@@ -156,7 +156,7 @@ export class ShelfView {
   card(e) {
     const cover = h('div', { class: 'cover' });
     const letter = Array.from(e.title.trim())[0] || '书';
-    const tile = h('div', { class: 'tile', style: `background:linear-gradient(145deg,hsl(${hue(e.title)} 45% 38%),hsl(${(hue(e.title) + 40) % 360} 50% 28%))` },
+    const tile = h('div', { class: 'tile', 'aria-hidden': 'true', style: `background:linear-gradient(145deg,hsl(${hue(e.title)} 45% 38%),hsl(${(hue(e.title) + 40) % 360} 50% 28%))` },
       h('b', { text: letter }), h('span', { text: e.title }));
     cover.append(tile);
     if (!e.cloud) coverUrl(e.id).then((u) => { if (u) { this.urls.push(u); cover.replaceChildren(h('img', { src: u, alt: '', loading: 'lazy', decoding: 'async' })); this.decorate(cover, e); } }).catch(() => {});
@@ -170,7 +170,7 @@ export class ShelfView {
       h('div', { class: 'bar', 'aria-hidden': 'true' }, h('i', { style: `width:${pct}%` })),
       h('div', { class: 'pct', text: e.cloud ? (e.uploading ? '上传中…' : `云端 · ${fmtSize(e.size)}${e.remoteNote ? ` · ${e.remoteNote}` : ''}`) : `${pct.toFixed(pct && pct < 10 ? 1 : 0)}%${e.remoteNote ? ` · ${e.remoteNote}` : ''}`, title: e.remoteNote }));
     const btn = h('div', { class: `book${e.cloud ? ' cloud' : ''}`, role: 'listitem' },
-      h('button', { class: 'book-open', type: 'button', 'aria-label': `${e.cloud ? '下载并打开' : '打开'} ${e.title}，进度 ${pct.toFixed(0)}%`, disabled: !!e.uploading, onclick: () => this.openEntry(e) }, cover, meta),
+      h('button', { class: 'book-open', type: 'button', disabled: !!e.uploading, onclick: () => this.openEntry(e) }, cover, meta),
     );
     // the "more" button is a sibling of the open button (nested buttons are invalid), positioned over the cover by CSS
     btn.append(more);
@@ -179,7 +179,7 @@ export class ShelfView {
 
   decorate(cover, e) {
     if (e.cloud) cover.append(h('span', { class: 'badge' }, icon('cloud', 12), '云端'));
-    cover.append(h('span', { class: 'fmt', text: e.format }));
+    cover.append(h('span', { class: 'fmt', 'aria-hidden': 'true', text: e.format }));
   }
 
   async openEntry(e) {

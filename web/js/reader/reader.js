@@ -49,7 +49,7 @@ export class ReaderView {
     this.btnSearch = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '搜索全文', onclick: () => this.openSearch() }, icon('search'));
     this.btnMark = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '添加书签', 'aria-pressed': 'false', onclick: () => this.toggleBookmark() }, icon('bookmark'));
     this.btnSet = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '阅读设置', onclick: () => this.openSettings() }, icon('font'));
-    this.topbar = h('header', { class: 'topbar' },
+    this.topbar = h('div', { class: 'topbar', role: 'toolbar', 'aria-label': '阅读工具栏' },
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '返回书架', onclick: () => this.ctx.goShelf() }, icon('back')),
       this.titleEl, this.btnToc, this.btnSearch, this.btnMark, this.btnSet);
     this.content = h('div', { class: 'content', lang: 'zh-CN' });
@@ -57,13 +57,13 @@ export class ReaderView {
       h('button', { class: 'btn', type: 'button', onclick: () => this.chapter(-1) }, '上一章'),
       h('button', { class: 'btn', type: 'button', onclick: () => this.chapter(1) }, '下一章'));
     this.frame = h('div', { class: 'frame', tabIndex: -1, 'aria-label': '正文' }, this.content, this.scrollNav);
-    this.stage = h('div', { class: 'stage', id: 'main' }, this.frame);
+    this.stage = h('div', { class: 'stage' }, this.frame);
     this.chEl = h('span', { class: 'ch' });
     this.posEl = h('span', { class: 'pos' });
     this.status = h('div', { class: 'statusline', 'aria-hidden': 'true' }, this.chEl, this.posEl);
     this.slider = h('input', { type: 'range', min: '0', max: '1000', step: '1', value: '0', 'aria-label': '跳转到阅读百分比' });
     this.pctLabel = h('span', { class: 'pctlabel', 'aria-live': 'off' }, '0%');
-    this.bottom = h('div', { class: 'bottombar' }, h('div', { class: 'line' },
+    this.bottom = h('div', { class: 'bottombar', role: 'toolbar', 'aria-label': '阅读进度' }, h('div', { class: 'line' },
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '上一章', onclick: () => this.chapter(-1) }, icon('prev')),
       this.slider, this.pctLabel,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '下一章', onclick: () => this.chapter(1) }, icon('next'))));
