@@ -1,6 +1,9 @@
 // Service worker: app shell cached for offline use (stale-while-revalidate for same-origin GET).
-// Cross-origin requests (the WebDAV server) are never touched. Bump CACHE when shipping a new version.
-const CACHE = 'pyreader-web-v1';
+// Only requests under this worker's own directory are handled. Everything else (cross-origin WebDAV, or a WebDAV
+// server on the SAME origin: /library, /users, ...) is never touched, so authenticated responses and progress JSON
+// are never cached or served stale. Bump CACHE when shipping a new version.
+const CACHE = 'pyreader-web-v2';
+const SCOPE_PATH = new URL('./', self.location).pathname;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png',
@@ -27,7 +30,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return;
+  if (url.origin !== location.origin || !url.pathname.startsWith(SCOPE_PATH)) return;
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(req, { ignoreSearch: true });
