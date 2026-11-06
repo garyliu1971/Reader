@@ -120,7 +120,8 @@ export async function coverUrl(id) {
 
 export async function removeBook(id) { await deleteBookData(id); }
 
-export async function touchOpened(meta) { meta.openedAt = Date.now(); await db.put('books', meta); }
+/** `at` (ms) should be on the same clock as saved progress (server-corrected), see reader.js; it decides what "continue reading" offers */
+export async function touchOpened(meta, at = Date.now()) { meta.openedAt = at; await db.put('books', meta); }
 
 // ---- progress (local, per book)
 export const getProgress = (bid) => db.get('progress', bid);
