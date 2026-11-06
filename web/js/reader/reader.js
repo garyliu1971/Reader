@@ -4,6 +4,7 @@ import { h, openPanel, toast, debounce, sleep } from '../ui/dom.js';
 import { icon } from '../ui/icons.js';
 import { Paginator } from './paginator.js';
 import { TtsReader, pickVoice } from './tts.js';
+import { Translate } from './translate.js';
 import { kvGet, kvSet } from '../store/db.js';
 import { openStored, touchOpened, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
@@ -11,6 +12,8 @@ import { stampNow } from '../core/progress.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
 const TAP_ZONE = 0.3;
+const DBLCLICK_MS = 230;   // a mouse tap waits this long so a double-click (select a word) can cancel the page turn
+const LANG_NAME = { en: '英语', zh: '中文', ja: '日语', ko: '韩语', fr: '法语', de: '德语', es: '西班牙语', ru: '俄语', it: '意大利语', pt: '葡萄牙语' };
 const THEMES = [['auto', '跟随系统'], ['light', '明亮'], ['dark', '夜间'], ['sepia', '护眼黄'], ['eye', '护眼绿']];
 const FONTS = [['serif', '宋体'], ['sans', '黑体'], ['kai', '楷体'], ['system', '系统']];
 
@@ -82,6 +85,20 @@ export class ReaderView {
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '停止朗读', onclick: () => this.tts && this.tts.stop() }, icon('stop')));
     this.loading = h('div', { class: 'loading', role: 'status' }, '正在打开…');
     r.append(this.stage, this.status, this.topbar, this.bottom, this.ttsBar, this.loading);
+    // select text -> small 翻译 button -> popover with the on-device translation (Chrome/Edge Translator API)
+    this.tr = Translate.supported() ? new Translate({ T: globalThis.Translator, LD: globalThis.LanguageDetector }) : null;
+    this.trSeq = 0;
+    this.trSel = null;
+    this.trLast = '';
+    this.trBtn = h('button', { class: 'tr-btn', type: 'button', hidden: true, 'aria-label': '翻译选中的文字', onmousedown: (e) => e.preventDefault(), onclick: () => this.runTranslate() }, '翻译');
+    this.trHead = h('div', { class: 'tr-head' });
+    this.trBody = h('div', { class: 'tr-body', role: 'status', 'aria-live': 'polite' });
+    this.trPop = h('div', { class: 'tr-pop', hidden: true, role: 'region', 'aria-label': '译文', onmousedown: (e) => { if (!e.target.closest('.tr-body')) e.preventDefault(); } },
+      this.trHead, this.trBody,
+      h('div', { class: 'tr-actions' },
+        h('button', { class: 'btn small', type: 'button', onclick: () => this.copyTranslation() }, '复制译文'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => this.hideTr() }, '关闭')));
+    r.append(this.trBtn, this.trPop);
     this._ttsMoving = 0;
     this.tts = null;
     if (TtsReader.supported()) {
@@ -114,6 +131,7 @@ export class ReaderView {
     let down = null;
     let pinch = null;
     f.addEventListener('pointerdown', (e) => {
+      if (this._tapT) { clearTimeout(this._tapT); this._tapT = 0; this._tapPrev = this._tapAct; }   // second half of a double-click?
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (ptrs.size === 2) {
         const [a, b] = [...ptrs.values()];
@@ -144,7 +162,7 @@ export class ReaderView {
       down = null;
       const dx = e.clientX - d.x, dy = e.clientY - d.y;
       const sel = window.getSelection && window.getSelection().toString();
-      if (sel) return;   // text is being selected/copied: never treat it as a tap
+      if (sel) { this._tapPrev = null; return; }   // text is being selected/copied: never treat it as a tap
       if (d.target && d.target.closest && d.target.closest('a')) return;
       if (d.type !== 'mouse' && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.5 && this.pg.mode === 'paged') {
         dx < 0 ? this.next() : this.prev();   // swipe (touch/pen only: a mouse drag is a text selection)
@@ -153,10 +171,17 @@ export class ReaderView {
       if (Math.abs(dx) > 10 || Math.abs(dy) > 10) return;
       const rect = f.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
-      if (this.barsOn()) { this.setBars(false); return; }
-      if (x < TAP_ZONE) this.prev();
-      else if (x > 1 - TAP_ZONE) this.next();
-      else this.setBars(true);
+      if (this._tapPrev) { const p = this._tapPrev; this._tapPrev = null; p(); }   // double-click that selected nothing: both clicks count
+      const act = () => {
+        this._tapT = 0;
+        if (this.barsOn()) { this.setBars(false); return; }
+        if (x < TAP_ZONE) this.prev();
+        else if (x > 1 - TAP_ZONE) this.next();
+        else this.setBars(true);
+      };
+      // a mouse click may be the first half of a double-click: wait a moment so the second click can cancel the turn.
+      // Touch and pen act at once.
+      if (d.type === 'mouse') { this._tapAct = act; this._tapT = setTimeout(act, DBLCLICK_MS); } else act();
     };
     f.addEventListener('pointerup', end);
     f.addEventListener('pointercancel', end);
@@ -181,6 +206,7 @@ export class ReaderView {
       if (!this.active) return;
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+      if (t && t.closest && t.closest('.tr-pop, .tr-btn') && (e.key === ' ' || e.key === 'Enter')) return;   // activate the focused button, do not turn the page
       const mod = e.ctrlKey || e.metaKey;
       if (mod && ['+', '=', '-', '_', '0'].includes(e.key)) {
         e.preventDefault();
@@ -195,7 +221,7 @@ export class ReaderView {
         case ' ': e.shiftKey ? this.prev() : this.next(); break;
         case 'Home': this.seekPercent(0); break;
         case 'End': this.seekPercent(100); break;
-        case 'Escape': if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
+        case 'Escape': if (!this.trPop.hidden || !this.trBtn.hidden) this.hideTr(); else if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
         case 't': case 'T': this.openToc('toc'); break;
         case 'b': case 'B': this.toggleBookmark(); break;
         case '/': e.preventDefault(); this.openSearch(); break;
@@ -206,6 +232,14 @@ export class ReaderView {
       e.preventDefault();
     };
     document.addEventListener('keydown', this.keyHandler);
+    this.selHandler = debounce(() => this.onSelection(), 250);
+    document.addEventListener('selectionchange', this.selHandler);
+    // do not offer 翻译 while the mouse is still dragging the selection; re-check when it is released
+    this._ptrDown = false;
+    document.addEventListener('pointerdown', (e) => { this._ptrDown = !(e.target.closest && e.target.closest('.tr-btn, .tr-pop')); }, true);
+    const released = () => { if (this._ptrDown) { this._ptrDown = false; this.selHandler(); } };
+    document.addEventListener('pointerup', released, true);
+    document.addEventListener('pointercancel', released, true);
     this.vis = () => { if (document.visibilityState === 'hidden' && this.active) this.saveSoon.flush(); };
     document.addEventListener('visibilitychange', this.vis);
     window.addEventListener('pagehide', this.vis);
@@ -268,6 +302,7 @@ export class ReaderView {
   }
 
   closeBook() {
+    this.hideTr();
     if (this.tts) this.tts.stop();
     if (this.book) { try { this.book.close(); } catch { /* ignore */ } }
     this.book = null;
@@ -304,6 +339,90 @@ export class ReaderView {
     if (key === 'fontSize') toast(`字号 ${this.settings.fontSize}`, { ms: 900 });
     if (!key.startsWith('tts')) this.applySettings(true);
     if (this.settingsSync) this.settingsSync();
+  }
+
+  // ------------------------------------------------------------------ translate selection (Translator API)
+  onSelection() {
+    if (!this.tr || !this.active || this.pdf || !this.book) { this.hideTr(); return; }
+    if (this._ptrDown) return;
+    const sel = globalThis.getSelection && getSelection();
+    if (!sel || !sel.rangeCount) { this.hideTr(); return; }
+    const range = sel.getRangeAt(0);
+    if (this.trPop.contains(range.commonAncestorContainer)) return;   // selecting inside the translation itself
+    const text = sel.toString();
+    if (sel.isCollapsed || !text.trim() || !this.content.contains(range.commonAncestorContainer)) { this.hideTr(); return; }
+    const rects = range.getClientRects();
+    const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+    const first = rects.length ? rects[0] : last;
+    if (!this.trPop.hidden && this.trSel && this.trSel.text === text) return;   // same selection, translation already showing
+    this.trSel = { text, rect: { left: first.left, right: last.right, top: first.top, bottom: last.bottom } };
+    this.trSeq++;
+    this.trPop.hidden = true;
+    this.trBtn.hidden = false;
+    const w = this.trBtn.offsetWidth || 60;
+    const below = last.bottom + 8 + 36 <= innerHeight;
+    this.trBtn.style.left = Math.max(8, Math.min(last.right - w / 2, innerWidth - w - 8)) + 'px';
+    this.trBtn.style.top = (below ? last.bottom + 8 : Math.max(8, first.top - 44)) + 'px';
+  }
+
+  hideTr() {
+    this.trSeq++;
+    this.trBtn.hidden = true;
+    this.trPop.hidden = true;
+    this.trSel = null;
+  }
+
+  showTr(head, body) {
+    const s = this.trSel;
+    this.trHead.textContent = head;
+    this.trBody.textContent = body;
+    this.trPop.hidden = false;
+    if (!s) return;
+    const w = Math.min(380, innerWidth - 24);
+    this.trPop.style.width = w + 'px';
+    this.trPop.style.left = Math.max(12, Math.min(s.rect.left, innerWidth - w - 12)) + 'px';
+    const ph = this.trPop.offsetHeight;
+    const room = innerHeight - s.rect.bottom - 16;
+    const top = room >= Math.min(ph, 180) ? s.rect.bottom + 10 : s.rect.top - ph - 10;
+    this.trPop.style.top = Math.max(8, Math.min(top, innerHeight - ph - 8)) + 'px';   // never push the buttons off screen
+  }
+
+  async runTranslate() {
+    const s = this.trSel;
+    if (!s || !this.tr) return;
+    this.trBtn.hidden = true;
+    const seq = ++this.trSeq;
+    this.showTr('翻译', '翻译中…');
+    const live = globalThis.getSelection ? getSelection() : null;
+    const text = live && live.toString().trim() && this.content.contains(live.anchorNode) ? live.toString() : s.text;   // the debounce may lag behind the real selection
+    try {
+      const r = await this.tr.translate(text, {
+        target: this.settings.trTarget,
+        onProgress: (p) => { if (seq === this.trSeq) this.showTr('首次使用', `正在下载语言模型 ${p}%（只下载一次）…`); },
+      });
+      if (seq !== this.trSeq) return;
+      this.trLast = r.text;
+      this.showTr(`${LANG_NAME[r.source] || r.source} → ${LANG_NAME[r.target] || r.target}`, r.text);
+    } catch (e) {
+      if (seq !== this.trSeq) return;
+      this.trLast = '';
+      this.showTr('无法翻译', e && e.message ? e.message : String(e));
+      if (e && e.code === 'activation') this.retryTr();   // the message says "click again": the button must be there
+    }
+  }
+
+  // put the 翻译 button next to the (error) popover so the user can click again
+  retryTr() {
+    const pop = this.trPop.getBoundingClientRect();
+    this.trBtn.hidden = false;
+    const h = this.trBtn.offsetHeight || 36, w = this.trBtn.offsetWidth || 60;
+    this.trBtn.style.left = Math.max(8, Math.min(pop.left, innerWidth - w - 8)) + 'px';
+    this.trBtn.style.top = Math.max(8, Math.min(pop.bottom + 8 + h <= innerHeight ? pop.bottom + 8 : pop.top - h - 8, innerHeight - h - 8)) + 'px';
+  }
+
+  async copyTranslation() {
+    if (!this.trLast) return;
+    try { await navigator.clipboard.writeText(this.trLast); toast('已复制译文', { ms: 1200 }); } catch { toast('复制失败，请手动选中复制', { ms: 2000 }); }
   }
 
   // ------------------------------------------------------------------ read aloud (speechSynthesis)
@@ -422,17 +541,23 @@ export class ReaderView {
         h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: sample }, '试听')),
         h('p', { class: 'hint', text: '朗读用浏览器自带的语音：Edge 带“Natural”的在线中文音色效果最好（需联网）；手机锁屏后系统可能暂停朗读。快捷键 R 开始/停止。' }));
     }
+    const trSeg = seg([['zh', '中文'], ['en', 'English']], 'trTarget');
+    const trBlock = this.tr
+      ? [h('label', { class: 'field' }, h('span', null, '划词翻译：翻译成'), trSeg.wrap),
+        h('p', { class: 'hint', text: '选中文字后点“翻译”。使用浏览器内置的本地翻译，不上传文字；首次使用某个语言需下载一次语言模型。中文原文会翻成英文。' })]
+      : [h('p', { class: 'hint', text: '划词翻译需要桌面版 Chrome 或 Edge（浏览器内置翻译）。当前浏览器不支持；Edge 可用右键“翻译所选内容”。' })];
     const typo = [
       h('label', { class: 'field' }, h('span', null, '字体'), fam.wrap), fs.el, lh.el, mg.el, ps.el,
       h('label', { class: 'field' }, h('span', null, '行宽上限（宽屏时居中）'), lw.wrap),
       h('div', { class: 'row' }, toggle('首行缩进', 'indent'), toggle('两端对齐', 'justify'), toggle('宽屏双页', 'spread')),
       h('label', { class: 'field' }, h('span', null, '翻页方式'), mode.wrap),
       ...ttsBlock,
+      ...trBlock,
     ];
     const body = [h('label', { class: 'field' }, h('span', null, '主题'), theme.wrap),
       ...(this.pdf ? [h('p', { class: 'hint', text: 'PDF 为固定版式，暂不支持字体/行距/边距设置（仅主题：夜间模式会反色显示）。' })] : typo),
       h('p', { class: 'hint', text: '快捷键：Ctrl/⌘ + 加号/减号/0 调字号；左右方向键、PageUp/PageDown、空格翻页；T 目录；B 书签；/ 搜索；双指捏合也可调字号。' })];
-    this.settingsSync = () => { theme.upd(); fam.upd(); fs.upd(); lh.upd(); mg.upd(); ps.upd(); mode.upd(); if (!this.pdf) { lw.upd(); rate.upd(); } };
+    this.settingsSync = () => { theme.upd(); fam.upd(); fs.upd(); lh.upd(); mg.upd(); ps.upd(); mode.upd(); if (!this.pdf) { lw.upd(); rate.upd(); trSeg.upd(); } };
     const p = openPanel({ title: '阅读设置', side: 'sheet', content: body, onClose: () => { this.settingsSync = null; if (offVoices) offVoices(); } });
     return p;
   }
@@ -530,8 +655,10 @@ export class ReaderView {
   }
 
   onPaginator(reason) {
+    if (reason === 'layout') this.hideTr();   // resize / font change: the fixed-position popover would point at the wrong place
     if (reason === 'page') {
       this.clearHighlight();
+      this.hideTr();
       this.markDirty();
       // the reader turned the page by hand while reading aloud: continue from the top of the new page
       if (this.tts && this.tts.state !== 'idle' && !this._ttsMoving && this.pg.mode === 'paged') this.tts.restart(this.pg.pageRange()[0]);

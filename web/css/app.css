@@ -150,6 +150,13 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .icon-btn.labelled { width: auto; padding: 0 10px; gap: 4px; }
 .icon-btn .lbl { font-size: 13px; }
 @media (max-width: 420px) { .icon-btn .lbl { display: none; } .icon-btn.labelled { width: 40px; padding: 0; } }
+/* selection translate */
+.tr-btn { position: fixed; z-index: 36; height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 18px; background: var(--accent); color: var(--on-accent, #fff); font-size: 14px; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
+.tr-pop { position: fixed; z-index: 36; max-height: 50vh; display: flex; flex-direction: column; overflow: hidden; padding: 10px 12px; background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+.tr-pop[hidden], .tr-btn[hidden] { display: none; }
+.tr-head { flex: none; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.tr-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; font-size: 16px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.tr-actions { flex: none; display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
 /* read-aloud control bar */
 .tts-bar { display: none; position: absolute; z-index: 30; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 40px); align-items: center; gap: 4px; padding: 4px 8px; background: var(--bar); border: 1px solid var(--border); border-radius: 999px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
 .reader.tts-on .tts-bar { display: flex; }
