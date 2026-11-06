@@ -1,0 +1,771 @@
+{
+ "cn2int": [
+  [
+   "十一",
+   11
+  ],
+  [
+   "二十三",
+   23
+  ],
+  [
+   "一百零五",
+   105
+  ],
+  [
+   "一千二百",
+   1200
+  ],
+  [
+   "一万二千",
+   12000
+  ],
+  [
+   "廿一",
+   21
+  ],
+  [
+   "０１２",
+   12
+  ],
+  [
+   "壹贰叁",
+   123
+  ],
+  [
+   "二〇二",
+   202
+  ],
+  [
+   "abc",
+   null
+  ]
+ ],
+ "en_chapters": [
+  [
+   0,
+   "Chapter 1"
+  ],
+  [
+   1093,
+   "Chapter 2"
+  ],
+  [
+   2186,
+   "Chapter 3"
+  ],
+  [
+   3279,
+   "Chapter 4"
+  ],
+  [
+   4372,
+   "Chapter 5"
+  ]
+ ],
+ "en_text": "Chapter 1\n\nSome words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. \n\nChapter 2\n\nSome words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. \n\nChapter 3\n\nSome words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. \n\nChapter 4\n\nSome words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. \n\nChapter 5\n\nSome words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. Some words here and there. \n\n",
+ "local_ids": [
+  [
+   "示例小说.txt",
+   4716,
+   "local:96d00dc60dd67c18435a708d809cc5fc102711aa"
+  ],
+  [
+   "a.epub",
+   0,
+   "local:19eff2612d274280b1c61fa048f074c579534e01"
+  ],
+  [
+   "Book (1).epub",
+   123456,
+   "local:31553ae62bc3091e290378ee1fce4ea6490ed957"
+  ],
+  [
+   "é.txt",
+   7,
+   "local:e269d4f58cf119ec3822da832f60c0190f8c5e42"
+  ],
+  [
+   "é.txt",
+   7,
+   "local:145c92b08dc7b2426318a920c20caaafe92764d4"
+  ]
+ ],
+ "merge_ab": {
+  "_clock": [
+   "dev-a"
+  ],
+  "_view": true,
+  "entries": {
+   "local:1111111111111111111111111111111111111111": {
+    "hidden": [
+     false,
+     1799999997000,
+     "dev-b"
+    ]
+   },
+   "remote:a.epub": {
+    "fav": [
+     false,
+     1799999996000,
+     "dev-b"
+    ],
+    "meta": [
+     {
+      "fp": "abc123",
+      "title": "A 书"
+     },
+     1799999995000,
+     "dev-a"
+    ]
+   },
+   "remote:b.txt": {
+    "fav": [
+     true,
+     1,
+     "dev-a"
+    ]
+   }
+  },
+  "progress": {
+   "remote:a.epub": {
+    "device": "dev-b",
+    "percent": 55.0,
+    "updated": 1799999990.0
+   },
+   "remote:b.txt": {
+    "device": "dev-a",
+    "percent": 100.0,
+    "updated": 1799999950.0
+   }
+  },
+  "version": 1
+ },
+ "merge_ba": {
+  "_clock": [
+   "dev-a"
+  ],
+  "_view": true,
+  "entries": {
+   "local:1111111111111111111111111111111111111111": {
+    "hidden": [
+     false,
+     1799999997000,
+     "dev-b"
+    ]
+   },
+   "remote:a.epub": {
+    "fav": [
+     false,
+     1799999996000,
+     "dev-b"
+    ],
+    "meta": [
+     {
+      "fp": "abc123",
+      "title": "A 书"
+     },
+     1799999995000,
+     "dev-a"
+    ]
+   },
+   "remote:b.txt": {
+    "fav": [
+     true,
+     1,
+     "dev-a"
+    ]
+   }
+  },
+  "progress": {
+   "remote:a.epub": {
+    "device": "dev-b",
+    "percent": 55.0,
+    "updated": 1799999990.0
+   },
+   "remote:b.txt": {
+    "device": "dev-a",
+    "percent": 100.0,
+    "updated": 1799999950.0
+   }
+  },
+  "version": 1
+ },
+ "normalize_rel": [
+  [
+   "a.txt",
+   "a.txt"
+  ],
+  [
+   "a/b/c.epub",
+   "a/b/c.epub"
+  ],
+  [
+   "/a",
+   null
+  ],
+  [
+   "a//b",
+   null
+  ],
+  [
+   "a/../b",
+   null
+  ],
+  [
+   "科幻/三体.epub",
+   "科幻/三体.epub"
+  ],
+  [
+   "a/.hidden",
+   "a/.hidden"
+  ],
+  [
+   "",
+   null
+  ],
+  [
+   "x/CON/y.txt",
+   null
+  ],
+  [
+   "a/b ",
+   null
+  ]
+ ],
+ "overlay_inputs": {
+  "a": {
+   "device_id": "dev-a",
+   "entries": {
+    "bad id": {
+     "fav": [
+      true,
+      1800000000000
+     ]
+    },
+    "local:1111111111111111111111111111111111111111": {
+     "hidden": [
+      true,
+      1799999997000
+     ]
+    },
+    "remote:a.epub": {
+     "fav": [
+      true,
+      1799999995000
+     ],
+     "meta": [
+      {
+       "fp": "abc123",
+       "title": "A 书"
+      },
+      1799999995000
+     ]
+    },
+    "remote:b.txt": {
+     "fav": [
+      true,
+      1800864000000
+     ]
+    },
+    "remote:c.txt": {
+     "fav": [
+      "yes",
+      1800000000000
+     ]
+    }
+   },
+   "hostname": "pc-a",
+   "progress": {
+    "remote:a.epub": {
+     "percent": 40.5,
+     "updated": 1799999900.0
+    },
+    "remote:b.txt": {
+     "percent": 150,
+     "updated": 1799999950.0
+    },
+    "remote:c.txt": {
+     "percent": 1,
+     "updated": -1
+    }
+   },
+   "user": "gary",
+   "version": 1
+  },
+  "b": {
+   "device_id": "dev-b",
+   "entries": {
+    "local:1111111111111111111111111111111111111111": {
+     "hidden": [
+      false,
+      1799999997000
+     ]
+    },
+    "remote:a.epub": {
+     "fav": [
+      false,
+      1799999996000
+     ]
+    }
+   },
+   "progress": {
+    "remote:a.epub": {
+     "percent": 55.0,
+     "updated": 1799999990.0
+    }
+   },
+   "version": 1
+  }
+ },
+ "own_overlay": {
+  "_clock": [],
+  "_rev": 4,
+  "_view": true,
+  "device_id": "web-123abc",
+  "entries": {
+   "remote:a.epub": {
+    "fav": [
+     true,
+     1800000000000,
+     "web-123abc"
+    ],
+    "hidden": [
+     true,
+     1800000000000,
+     "web-123abc"
+    ],
+    "meta": [
+     {
+      "fp": "ff00",
+      "title": "T"
+     },
+     1800000000000,
+     "web-123abc"
+    ]
+   }
+  },
+  "hostname": "My Phone",
+  "progress": {
+   "local:2222222222222222222222222222222222222222": {
+    "device": "web-123abc",
+    "percent": 3.0,
+    "updated": 1799999995.0
+   },
+   "remote:a.epub": {
+    "device": "web-123abc",
+    "percent": 61.25,
+    "updated": 1800000000.0
+   }
+  },
+  "user": "gary",
+  "version": 1
+ },
+ "progress_files": [
+  [
+   "a.epub",
+   "96d91b3a48925be96400.json"
+  ],
+  [
+   "科幻/三体.epub",
+   "f3596638d58cbb53d4db.json"
+  ],
+  [
+   "x/y/z.txt",
+   "5e2b9f4dbd9c94790b7a.json"
+  ],
+  [
+   "Ünï.md",
+   "7c6d8d4db2ab4db74bc0.json"
+  ]
+ ],
+ "prune_kept": [
+  "local:0000000000000000000000000000000000000003",
+  "local:0000000000000000000000000000000000000004",
+  "local:0000000000000000000000000000000000000007",
+  "local:0000000000000000000000000000000000000008",
+  "local:0000000000000000000000000000000000000009"
+ ],
+ "safe_component": [
+  [
+   "web-a1b2c3",
+   "web-a1b2c3"
+  ],
+  [
+   "ok.name_1-2",
+   "ok.name_1-2"
+  ],
+  [
+   ".hidden",
+   null
+  ],
+  [
+   "trail.",
+   null
+  ],
+  [
+   "a b",
+   null
+  ],
+  [
+   "",
+   null
+  ],
+  [
+   "CON",
+   null
+  ],
+  [
+   "con.txt",
+   null
+  ],
+  [
+   "COM1",
+   null
+  ],
+  [
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  ],
+  [
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   null
+  ],
+  [
+   "..",
+   null
+  ],
+  [
+   "a/b",
+   null
+  ],
+  [
+   "中文",
+   null
+  ],
+  [
+   "NUL.tar.gz",
+   null
+  ],
+  [
+   "lpt9",
+   null
+  ]
+ ],
+ "safe_segment": [
+  [
+   "a.txt",
+   "a.txt"
+  ],
+  [
+   "中文.epub",
+   "中文.epub"
+  ],
+  [
+   "..",
+   null
+  ],
+  [
+   ".",
+   null
+  ],
+  [
+   "",
+   null
+  ],
+  [
+   "a/b",
+   null
+  ],
+  [
+   "a\\b",
+   null
+  ],
+  [
+   "a:b",
+   null
+  ],
+  [
+   "x.",
+   null
+  ],
+  [
+   "x ",
+   null
+  ],
+  [
+   "aux.txt",
+   null
+  ],
+  [
+   "‮txt.exe",
+   null
+  ],
+  [
+   "ctl\u0001",
+   null
+  ],
+  [
+   "ok name.txt",
+   "ok name.txt"
+  ],
+  [
+   "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+  ],
+  [
+   "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   null
+  ]
+ ],
+ "sample_chapters": [
+  [
+   0,
+   "开篇"
+  ],
+  [
+   7,
+   "楔子"
+  ],
+  [
+   215,
+   "第一章 残骸"
+  ],
+  [
+   463,
+   "第二章 回声"
+  ],
+  [
+   692,
+   "第三章 蓝纹"
+  ],
+  [
+   869,
+   "第四章 出价"
+  ],
+  [
+   1058,
+   "第五章 追猎"
+  ],
+  [
+   1222,
+   "第六章 通道"
+  ],
+  [
+   1452,
+   "第七章 坠落"
+  ],
+  [
+   1574,
+   "尾声"
+  ]
+ ],
+ "sample_len": 1665,
+ "set_field_ts": [
+  1800000000000,
+  1800000000000
+ ],
+ "synthetic_chapters": [
+  [
+   0,
+   "开篇"
+  ],
+  [
+   4,
+   "序章 起点"
+  ],
+  [
+   413,
+   "第一章 标题一"
+  ],
+  [
+   754,
+   "第二章 标题二"
+  ],
+  [
+   1095,
+   "第三章 标题三"
+  ],
+  [
+   1436,
+   "第四章 标题四"
+  ],
+  [
+   1777,
+   "第十一章 标题十一"
+  ],
+  [
+   2120,
+   "第二十章 标题二十"
+  ]
+ ],
+ "synthetic_text": "书名\n\n序章 起点\n\n这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。这是一段很长的正文。\n\n第一章 标题一\n\n正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。\n\n第二章 标题二\n\n正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。\n\n第三章 标题三\n\n正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。\n\n第四章 标题四\n\n正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。\n\n第十一章 标题十一\n\n正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。\n\n第二十章 标题二十\n\n正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。正文内容，继续往下写。\n\n",
+ "valid_book_id": [
+  [
+   "remote:a.epub",
+   true
+  ],
+  [
+   "remote:科幻/三体.epub",
+   true
+  ],
+  [
+   "remote:.x/a.txt",
+   false
+  ],
+  [
+   "remote:~$a.docx",
+   false
+  ],
+  [
+   "remote:",
+   false
+  ],
+  [
+   "local:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   true
+  ],
+  [
+   "local:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   false
+  ],
+  [
+   "local:abc",
+   false
+  ],
+  [
+   "x:y",
+   false
+  ],
+  [
+   "remote:a/../b",
+   false
+  ]
+ ],
+ "valid_remote_rel_py": [
+  [
+   "a.epub",
+   true
+  ],
+  [
+   "dir/b.txt",
+   true
+  ],
+  [
+   ".x.epub.part",
+   false
+  ],
+  [
+   "a.epub.part",
+   false
+  ],
+  [
+   "~$a.docx",
+   false
+  ],
+  [
+   "a.exe",
+   false
+  ],
+  [
+   "a.PDF",
+   true
+  ],
+  [
+   "a.mp3",
+   true
+  ]
+ ],
+ "validate_a": {
+  "n_issues": 3,
+  "view": {
+   "_clock": [
+    "dev-a"
+   ],
+   "_view": true,
+   "device_id": "dev-a",
+   "entries": {
+    "local:1111111111111111111111111111111111111111": {
+     "hidden": [
+      true,
+      1799999997000,
+      "dev-a"
+     ]
+    },
+    "remote:a.epub": {
+     "fav": [
+      true,
+      1799999995000,
+      "dev-a"
+     ],
+     "meta": [
+      {
+       "fp": "abc123",
+       "title": "A 书"
+      },
+      1799999995000,
+      "dev-a"
+     ]
+    },
+    "remote:b.txt": {
+     "fav": [
+      true,
+      1,
+      "dev-a"
+     ]
+    }
+   },
+   "hostname": "pc-a",
+   "progress": {
+    "remote:a.epub": {
+     "device": "dev-a",
+     "percent": 40.5,
+     "updated": 1799999900.0
+    },
+    "remote:b.txt": {
+     "device": "dev-a",
+     "percent": 100.0,
+     "updated": 1799999950.0
+    }
+   },
+   "user": "gary",
+   "version": 1
+  }
+ },
+ "wire": {
+  "device_id": "web-123abc",
+  "entries": {
+   "remote:a.epub": {
+    "fav": [
+     true,
+     1800000000000
+    ],
+    "hidden": [
+     true,
+     1800000000000
+    ],
+    "meta": [
+     {
+      "fp": "ff00",
+      "title": "T"
+     },
+     1800000000000
+    ]
+   }
+  },
+  "hostname": "My Phone",
+  "progress": {
+   "local:2222222222222222222222222222222222222222": {
+    "percent": 3.0,
+    "updated": 1799999995.0
+   },
+   "remote:a.epub": {
+    "percent": 61.25,
+    "updated": 1800000000.0
+   }
+  },
+  "user": "gary",
+  "version": 1
+ },
+ "wire_text": "{\n \"device_id\": \"web-123abc\",\n \"entries\": {\n  \"remote:a.epub\": {\n   \"fav\": [\n    true,\n    1800000000000\n   ],\n   \"hidden\": [\n    true,\n    1800000000000\n   ],\n   \"meta\": [\n    {\n     \"fp\": \"ff00\",\n     \"title\": \"T\"\n    },\n    1800000000000\n   ]\n  }\n },\n \"hostname\": \"My Phone\",\n \"progress\": {\n  \"local:2222222222222222222222222222222222222222\": {\n   \"percent\": 3.0,\n   \"updated\": 1799999995.0\n  },\n  \"remote:a.epub\": {\n   \"percent\": 61.25,\n   \"updated\": 1800000000.0\n  }\n },\n \"user\": \"gary\",\n \"version\": 1\n}"
+}
