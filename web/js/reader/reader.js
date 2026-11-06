@@ -520,7 +520,7 @@ export class ReaderView {
 
   async followLink(href) {
     if (!href) return;
-    const target = this.book.resolveHref(this.s, href);
+    const target = await this.book.resolveHref(this.s, href);   // synchronous for most formats; KF8 (azw3) links resolve asynchronously
     if (target) { await this.gotoTarget(target.s, target.id ? { id: target.id } : { start: true }); return; }
     if (/^(https?:|mailto:)/i.test(href)) {
       const a = document.createElement('a');
