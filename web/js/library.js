@@ -6,6 +6,7 @@ import { openEpub } from './parse/epub.js';
 import { parseTxtAsync, txtBook, richTextBook } from './parse/textbooks.js';
 import { openPdf } from './parse/pdf.js';
 import { openMobi } from './parse/mobi.js';
+import { detectComic } from './core/comic.js';
 
 export const FORMATS = { '.txt': 'txt', '.md': 'md', '.markdown': 'md', '.epub': 'epub', '.mobi': 'mobi', '.azw': 'mobi', '.azw3': 'mobi', '.prc': 'mobi', '.pdf': 'pdf', '.html': 'html', '.htm': 'html' };
 export const ACCEPT = Object.keys(FORMATS).join(',');
@@ -29,6 +30,9 @@ async function makeThumb(blob, maxW = 240) {
     return blob.size < 400 * 1024 ? blob : null;
   }
 }
+
+/** meta fields of an image-only book: comic (bool, the core/comic.js verdict) and ppd (OPF page-progression-direction) */
+const comicMeta = (book) => ({ comic: book.format === 'epub' && detectComic(book.docStats, book.bookType).comic, ppd: book.ppd || null });
 
 export async function getBook(id) { return db.get('books', id); }
 export async function allBooks() { return db.getAll('books'); }
@@ -60,6 +64,7 @@ export async function importBlob(file, { name = file.name, remote = null, onStat
     } catch (e) { book.close(); throw e; }
     meta.lens = book.lens;
     Object.assign(meta, book.layoutData());   // docLens, headings, parts (mobi: + keep, tocRaw): lets us open without rescanning
+    Object.assign(meta, comicMeta(book));
     if (book.title) meta.title = book.title;
     meta.author = book.author;
     try { const c = await book.cover(); if (c) coverBlob = await makeThumb(c); } catch { /* generated tile instead */ }
@@ -98,12 +103,13 @@ export async function openStored(id) {
   if (meta.format === 'epub' || meta.format === 'mobi') {
     const isMobi = meta.format === 'mobi';
     book = await (isMobi ? openMobi : openEpub)(blob);
-    if (meta.docLens && meta.docLens.length === book.docs.length && (!isMobi || (meta.keep && meta.tocRaw))) {
+    // rows saved before comic detection existed have comic === undefined: scan them once (the scan also measures images/text)
+    if (meta.docLens && meta.docLens.length === book.docs.length && (!isMobi || (meta.keep && meta.tocRaw)) && (isMobi || meta.comic !== undefined)) {
       book.layout(meta.docLens, meta.headings, meta.parts, isMobi ? { keep: meta.keep, tocRaw: meta.tocRaw } : undefined);
     } else {   // imported by an older build / changed file: rescan once
       await book.scan();
       meta.lens = book.lens;
-      Object.assign(meta, book.layoutData());
+      Object.assign(meta, book.layoutData(), comicMeta(book));
       await db.put('books', meta);
     }
   } else if (meta.format === 'txt') {
