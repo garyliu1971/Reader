@@ -5,7 +5,8 @@ import { icon } from '../ui/icons.js';
 import { Paginator } from './paginator.js';
 import { TtsReader, pickVoice } from './tts.js';
 import { CloudEngine, CloudApi } from './cloudengine.js';
-import { getCloudCfg, loadCloudCfg } from '../store/cloudcfg.js';
+import { getCloudCfg, loadCloudCfg, saveCloudCfg, onCloudCfgChange } from '../store/cloudcfg.js';
+import { GROUP_LABEL, cloudActive, cloudOptions, selectedValue, applyChoice, statusText, tokenIncomplete, HINT_INCOMPLETE } from '../core/ttsux.js';
 import { Translate } from './translate.js';
 import { FindBar } from './find.js';
 import { kvGet, kvSet } from '../store/db.js';
@@ -633,17 +634,39 @@ export class ReaderView {
     const ttsBlock = [];
     if (this.tts) {
       const synth = globalThis.speechSynthesis;
-      const sel = h('select', { 'aria-label': '朗读音色', onchange: () => this.setSetting('ttsVoice', sel.value) });
+      const status = h('p', { class: 'hint', role: 'status', dataset: { ttsStatus: '1' } });
+      const sel = h('select', { 'aria-label': '朗读音色', onchange: () => choose(sel.value) });
+      const refreshStatus = () => { status.textContent = statusText(getCloudCfg()); status.classList.toggle('warn', tokenIncomplete(getCloudCfg())); };
       const fill = () => {
-        const vs = (synth.getVoices() || []).slice().sort((a, b) => (Number(b.lang.startsWith('zh')) - Number(a.lang.startsWith('zh'))) || a.name.localeCompare(b.name));
-        sel.replaceChildren(h('option', { value: '', text: '自动（优先中文自然音色）' }), ...vs.map((v) => h('option', { value: v.voiceURI, text: `${v.name} (${v.lang})` })));
-        sel.value = s().ttsVoice;
+        const vs = (synth ? (synth.getVoices() || []) : []).slice().sort((a, b) => (Number(b.lang.startsWith('zh')) - Number(a.lang.startsWith('zh'))) || a.name.localeCompare(b.name));
+        const online = cloudOptions(getCloudCfg());
+        sel.replaceChildren(h('option', { value: '', text: '自动（优先中文自然音色）' }), ...vs.map((v) => h('option', { value: v.voiceURI, text: `${v.name} (${v.lang})` })),
+          ...(online.length ? [h('optgroup', { label: GROUP_LABEL }, ...online.map((o) => h('option', { value: o.value, text: o.label })))] : []));
+        sel.value = selectedValue(getCloudCfg(), s().ttsVoice);
+        refreshStatus();
+      };
+      const choose = async (value) => {
+        const r = applyChoice(value, getCloudCfg());
+        if (r.hint) { toast(r.hint, { ms: 3000 }); fill(); return; }
+        if (r.ttsVoice !== undefined) this.setSetting('ttsVoice', r.ttsVoice);
+        if (r.cloudPatch) await saveCloudCfg(r.cloudPatch);   // notifies -> fill()
+        else fill();
       };
       fill();
-      synth.addEventListener('voiceschanged', fill);
-      offVoices = () => synth.removeEventListener('voiceschanged', fill);
+      if (synth) synth.addEventListener('voiceschanged', fill);
+      const offCfg = onCloudCfgChange(fill);   // settings saved elsewhere take effect without reopening the reader
+      offVoices = () => { if (synth) synth.removeEventListener('voiceschanged', fill); offCfg(); };
       const sample = () => {
         if (this.tts.state !== 'idle') { toast('正在朗读，先停止后再试听', { ms: 1500 }); return; }
+        const cfg = getCloudCfg();
+        if (cloudActive(cfg) && this.tts.cloud) {
+          const eng = this.tts.cloud;
+          eng.prime();   // inside the tap, so the browser lets <audio> play
+          eng.speak('这是朗读示例：天地玄黄，宇宙洪荒。', () => true, { cloud: cfg, ttsRate: s().ttsRate })
+            .then((r) => { if (r !== 'end' && r !== 'cancel') toast(eng.lastError ? eng.lastError.message : '在线试听失败', { ms: 3000 }); });
+          return;
+        }
+        if (!synth) { toast(tokenIncomplete(cfg) ? HINT_INCOMPLETE : '此浏览器不支持朗读', { ms: 2500 }); return; }
         const u = new SpeechSynthesisUtterance('这是朗读示例：天地玄黄，宇宙洪荒。');
         const v = pickVoice(synth.getVoices(), 'zh-CN', s().ttsVoice);
         u.lang = v ? v.lang : 'zh-CN';
@@ -653,7 +676,7 @@ export class ReaderView {
         synth.speak(u);
       };
       ttsBlock.push(h('label', { class: 'field' }, h('span', null, '朗读音色'), sel), rate.el,
-        h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: sample }, '试听')),
+        status, h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: sample }, '试听')),
         h('p', { class: 'hint', text: '朗读用浏览器自带的语音：Edge 带“Natural”的在线中文音色效果最好（需联网）；手机锁屏后系统可能暂停朗读。快捷键 R 开始/停止。' }));
     }
     const trSeg = seg([['zh', '中文'], ['en', 'English']], 'trTarget');
