@@ -43,11 +43,20 @@ for (const scheme of ['light', 'dark']) {
   await page.evaluate(() => window.__pyreader.reader.openSettings()); await wait(500);
   await run(page, `settings sheet ${scheme}`);
   await page.keyboard.press('Escape'); await wait(300);
+  // in-book search bar with an active hit (two-row phone layout)
+  await page.keyboard.press('/'); await wait(400);
+  await page.fill('.find-input', '一'); await wait(1200);
+  console.log('find bar:', await page.evaluate(() => { const r = window.__pyreader.reader; return `${r.find.count.textContent} active=${!!CSS.highlights.get('search-active')}`; }));
+  await run(page, `search bar ${scheme}`);
+  await page.screenshot({ path: SHOTS + `/a11y-search-${scheme}.png` });
+  await page.keyboard.press('Escape'); await wait(300);
   await page.evaluate(() => window.__pyreader.reader.setBars(true));
   await page.keyboard.press('r'); await wait(500);
   console.log('tts bar visible:', await page.evaluate(() => { const b = document.querySelector('.tts-bar'); return !!b && getComputedStyle(b).display !== 'none'; }));
   await run(page, `reading, tts bar on ${scheme}`);
-  // back on the shelf with the "继续阅读" card showing (the first scan above ran before any book was opened)
+  // back on the shelf with the "继续阅读" card showing (the first scan above ran before any book was opened);
+  // merely opening a book no longer offers it, so move the position first (the first book may be a single page)
+  await page.evaluate(() => window.__pyreader.reader.seekPercent(40)); await wait(1500);
   await page.evaluate(() => window.__pyreader.reader.ctx.goShelf()); await wait(800);
   console.log('continue card visible:', await page.evaluate(() => { const c = document.querySelector('.continue'); return !!c && c.getBoundingClientRect().height > 0; }));
   await run(page, `shelf with continue card ${scheme}`);

@@ -71,7 +71,8 @@ export class TtsReader {
    * @param host   { text(): string, breaks(): Set<number>|null, reveal(a,b), nextSection(): Promise<boolean>,
    *                 changed(state), finished(), failed(msg), settings(): {ttsRate, ttsVoice} }
    */
-  constructor({ synth, Utter, host }) {
+  constructor({ synth, Utter, host, startTimeoutMs = 6000 }) {
+    this.startTimeoutMs = startTimeoutMs;
     this.synth = synth;
     this.Utter = Utter;
     this.host = host;
@@ -122,6 +123,12 @@ export class TtsReader {
       this.host.reveal(a, b);
       const r = await this._say(text.slice(a, b), token);
       if (token !== this.token) return;
+      if (r === 'nostart') {
+        // speak() was accepted but the engine never began: e.g. Android Edge (speechSynthesis unusable) or a device without a TTS engine
+        this.stop();
+        this.host.failed('朗读没有声音输出：此浏览器的朗读功能不可用（例如手机版 Edge）。请换用系统自带浏览器（如华为浏览器）或电脑浏览器；若仍无声，请检查系统“文字转语音”引擎。');
+        return;
+      }
       if (r === 'error') {
         if (++failures >= 3) { this.stop(); this.host.failed('朗读失败：浏览器没有可用的语音，或语音服务无响应。'); return; }
       } else failures = 0;
@@ -140,9 +147,16 @@ export class TtsReader {
       u.lang = v ? v.lang : lang;
       if (v) u.voice = v;
       u.rate = cfg.ttsRate || 1;
-      u.onend = () => resolve('end');
-      u.onerror = (e) => resolve(e && (e.error === 'canceled' || e.error === 'interrupted') ? 'cancel' : 'error');
+      let timer = null;
+      const done = (r) => { clearTimeout(timer); resolve(r); };
+      u.onstart = () => clearTimeout(timer);
+      u.onend = () => done('end');
+      u.onerror = (e) => done(e && (e.error === 'canceled' || e.error === 'interrupted') ? 'cancel' : 'error');
       if (token !== this.token) { resolve('cancel'); return; }
+      if (this.startTimeoutMs > 0) timer = setTimeout(() => {
+        try { this.synth.cancel(); } catch { /* ignore */ }
+        resolve('nostart');
+      }, this.startTimeoutMs);
       this.synth.speak(u);
     });
   }

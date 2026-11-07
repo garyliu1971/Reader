@@ -98,14 +98,19 @@ await link.click(); await wait(800);
 st = await R();
 ok(st.s === 2, 'internal link navigates to target chapter', `s=${st.s}`);
 
-// ---- search
+// ---- search (bar with n / total; the list is behind a button; full coverage in search.mjs)
 await page.keyboard.press('/'); await wait(400);
-await page.fill('.panel input[type=search]', '许多年以后'); await wait(1500);
+await page.fill('.find-input', '许多年以后'); await wait(1500);
+const nTotal = Number((await page.textContent('.find-count')).split('/')[1]);
+ok(nTotal > 20, 'search counts many hits', `count=${await page.textContent('.find-count')}`);
+await page.locator('.findbar button[aria-label="结果列表"]').click(); await wait(800);
 const nHits = await page.locator('.panel .list li').count();
-ok(nHits > 20, 'search returns many hits', `n=${nHits}`);
+ok(nHits > 20, 'search list shows many hits', `n=${nHits}`);
 await page.locator('.panel .list li button').nth(30).click(); await wait(800);
-ok(await page.evaluate(() => !!(CSS.highlights && CSS.highlights.get('search'))), 'search hit highlighted');
+ok(await page.evaluate(() => !!(CSS.highlights && CSS.highlights.get('search-active'))), 'search hit highlighted');
 await page.screenshot({ path: SHOTS + '/search-hit.png' });
+await page.keyboard.press('Escape'); await wait(300);
+ok(await page.evaluate(() => !CSS.highlights.get('search-active') && !window.__pyreader.reader.find.isOpen), 'closing the search clears the highlight');
 
 // ---- bookmarks
 await page.keyboard.press('b'); await wait(500);
