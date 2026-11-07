@@ -254,3 +254,40 @@ body:has(.reader:not([hidden]).tts-on) .update-bar { bottom: calc(env(safe-area-
 .spin .ico { animation: spin 1s linear infinite; }
 
 .frame:focus-visible { outline: none; }
+
+/* online library (Gutenberg) */
+.shelf-add { display: flex; margin-top: 8px; }
+.online-lib-btn { align-self: flex-start; }
+.empty .online-lib-btn { display: inline-flex; }
+.ol-panel .panel-body { min-height: 240px; }
+.ol-form { display: flex; flex-direction: column; gap: 8px; }
+.ol-line { display: flex; gap: 8px; flex-wrap: wrap; }
+.ol-line input[type=search] { flex: 1 1 200px; min-width: 0; }
+.ol-line select { width: auto; flex: 0 0 auto; }
+.ol-opt { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); min-height: 32px; }
+.ol-opt input { width: 20px; height: 20px; accent-color: var(--accent); }
+.ol-status { margin: 10px 0 4px; min-height: 8px; }
+.ol-msg { margin: 4px 0; }
+.ol-state { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; background: var(--card); }
+.ol-state.auth, .ol-state.quota { border-color: var(--danger); }
+.ol-busy { display: flex; align-items: center; gap: 8px; color: var(--muted); margin: 4px 0; }
+.spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: ol-spin .8s linear infinite; display: inline-block; flex: none; }
+@keyframes ol-spin { to { transform: rotate(360deg); } }
+.ol-list { list-style: none; margin: 0; padding: 0; }
+.ol-row { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ol-cover { flex: none; width: 56px; height: 80px; border-radius: 4px; overflow: hidden; background: var(--border); display: flex; align-items: center; justify-content: center; }
+.ol-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ol-ph { font-size: 24px; font-weight: 700; color: var(--muted); }
+.ol-info { flex: 1 1 auto; min-width: 0; }
+.ol-title { font-weight: 600; overflow-wrap: anywhere; }
+.ol-auth, .ol-id { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.ol-err { color: var(--danger); font-size: 13px; margin: 4px 0 0; }
+.ol-err .btn { margin-left: 8px; }
+.ol-act { flex: none; display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.ol-added { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-size: 14px; font-weight: 600; justify-content: center; }
+.ol-more { display: flex; justify-content: center; margin: 12px 0 4px; }
+@media (max-width: 420px) {
+  .ol-row { flex-wrap: wrap; }
+  .ol-info { flex-basis: calc(100% - 80px); }
+  .ol-act { flex-direction: row; margin-left: 68px; align-items: center; }
+}

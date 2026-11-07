@@ -8,6 +8,7 @@ import { storageEstimate, persistRequest } from '../store/db.js';
 import { remoteBookId, aliasIds } from '../core/bookid.js';
 import { continueCandidate, touchedAt, ago, DONE_PERCENT } from '../core/recent.js';
 import { comicPrompt } from './comic.js';
+import { openOnlineLibrary, ONLINE_LIB_LABEL } from './onlinelib.js';
 
 const SORTS = [['recent', '最近阅读'], ['title', '书名'], ['added', '加入时间'], ['progress', '阅读进度']];
 const FILTERS = [['all', '全部'], ['recent', '最近'], ['reading', '在读'], ['unread', '未读'], ['done', '读完'], ['fav', '收藏'], ['cloud', '云端'], ['hidden', '已隐藏']];
@@ -52,9 +53,35 @@ export class ShelfView {
         h('button', { class: 'icon-btn', type: 'button', 'aria-label': '设置', onclick: () => this.ctx.openSettings() }, icon('gear')),
         h('button', { class: 'btn primary', type: 'button', onclick: () => this.fileInput.click() }, icon('plus', 18), '导入')),
       h('div', { class: 'shelf-tools' }, this.search, this.sortSel),
+      h('div', { class: 'shelf-add' }, this.onlineButton()),
       this.chips, this.syncLine);
     this.root.replaceChildren(head, this.contBox, this.grid, this.fileInput);
     this.renderChips();
+  }
+
+  /** entry to the online library (Gutenberg); one node per place */
+  onlineButton(kind = '') {
+    return h('button', { class: `btn small online-lib-btn ${kind}`.trim(), type: 'button', onclick: () => this.openOnline() }, icon('cloud', 16), ONLINE_LIB_LABEL);
+  }
+
+  openOnline() {
+    return openOnlineLibrary({
+      getBooks: () => allBooks(),
+      importFile: (file, { origin, onStatus }) => this.importOnline(file, { origin, onStatus }),
+      openBook: (id) => { const e = this.entries.find((x) => x.id === id); if (e) this.openLocal(e); else this.ctx.open(id); },
+      openSettings: () => this.ctx.openSettings(),
+    });
+  }
+
+  /** a downloaded online-library epub goes through the same importBlob path as a picked file; origin marks it for 已添加 */
+  async importOnline(file, { origin, onStatus }) {
+    this.importing = (this.importing || 0) + 1;   // the update prompt asks before reloading mid-import
+    try {
+      persistRequest().catch(() => {});
+      const r = await importBlob(file, { name: file.name, origin, onStatus });
+      await this.render();
+      return r.meta;
+    } finally { this.importing--; }
   }
 
   renderChips() {
@@ -148,10 +175,13 @@ export class ShelfView {
     this.urls = [];
     const list = this.view(entries);
     this.grid.replaceChildren();
+    this.grid.toggleAttribute('role', false);   // role=list only while it holds cards (an empty/message-only list fails axe aria-required-children)
+    if (list.length) this.grid.setAttribute('role', 'list');
     this.renderContinue(entries);
     if (!entries.length) {
       this.grid.replaceChildren(h('div', { class: 'empty', style: 'grid-column:1/-1' },
         h('p', null, '书架是空的。'), h('p', null, '点右上角“导入”，或把 EPUB / MOBI / AZW3 / TXT / Markdown / HTML / PDF 文件拖到这个页面。'),
+        h('p', null, this.onlineButton('primary')),
         h('p', { class: 'hint', text: '也可以在设置里连接 WebDAV，与桌面版 PyReader 共享书库和阅读进度。' })));
       return;
     }
