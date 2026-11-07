@@ -277,7 +277,17 @@ export class SyncEngine {
   }
 
   // ------------------------------------------------------------ per-book progress
-  async pullBookProgress(bid) {
+  /** Newest record among `bid` and its aliases (see aliasIds); the primary id wins ties. */
+  async pullBookProgress(bid, aliases = []) {
+    let best = await this._pullOne(bid);
+    for (const a of aliases) {
+      const r = await this._pullOne(a);
+      if (r && (!best || r.updated > best.updated)) best = r;
+    }
+    return best;
+  }
+
+  async _pullOne(bid) {
     if (!validBookId(bid)) return null;
     let r;
     try { r = await this.client.get(progressPath(this.user, bid), { maxBytes: JSON_MAX_BYTES, okCodes: [404] }); } catch { return null; }
@@ -289,7 +299,14 @@ export class SyncEngine {
    * Write a per-book progress file. Reads the remote one first and never regresses a newer record.
    * @returns {{status:'written'|'remote-newer'|'error', remote?:object, message?:string}}
    */
-  async pushBookProgress({ bid, percent, offset = undefined, chapter = '', updated = null }) {
+  async pushBookProgress({ bid, percent, offset = undefined, chapter = '', updated = null, aliases = [] }) {
+    const stamp0 = updated ?? stampNow(this.now(), this.skewMs());
+    const res = await this._pushOne({ bid, percent, offset, chapter, updated: stamp0 });
+    for (const a of aliases) await this._pushOne({ bid: a, percent, offset, chapter, updated: stamp0 });
+    return res;
+  }
+
+  async _pushOne({ bid, percent, offset = undefined, chapter = '', updated = null }) {
     if (!validBookId(bid)) return { status: 'error', message: 'bad book id' };
     const stamp = updated ?? stampNow(this.now(), this.skewMs());
     try {

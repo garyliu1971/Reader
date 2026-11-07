@@ -10,6 +10,7 @@ import { kvGet, kvSet } from '../store/db.js';
 import { openStored, touchRead, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
+import { aliasIds, localBookId } from '../core/bookid.js';
 import { DWELL_MS } from '../core/recent.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
@@ -776,12 +777,12 @@ export class ReaderView {
     const rec = { bid: this.meta.id, anchor: this.anchor(), percent: Math.round(pct * 1000) / 1000, updated: stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0), chapter: this.sectionTitle() };
     this.lastSaved = rec;
     try { await saveProgress(rec); } catch (e) { console.warn('[progress] save failed', e); }
-    this.ctx.onProgress({ bid: rec.bid, percent: rec.percent, chapter: rec.chapter, updated: rec.updated });
+    this.ctx.onProgress({ bid: rec.bid, aliases: aliasIds(this.meta), percent: rec.percent, chapter: rec.chapter, updated: rec.updated });
   }
 
   async checkRemote(saved) {
     try {
-      const remote = await this.ctx.fetchRemoteProgress(this.meta.id);
+      const remote = await this.ctx.fetchRemoteProgress(this.meta.id, aliasIds(this.meta));
       if (!remote || !this.active || !this.meta) return;
       const localTs = saved ? saved.updated : 0;
       if (remote.updated <= localTs || Math.abs(remote.percent - this.percent()) < 0.5) return;

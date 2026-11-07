@@ -5,7 +5,7 @@ import { allBooks, importBlob, removeBook, coverUrl, ACCEPT, formatOf } from '..
 import { syncMgr } from '../sync/manager.js';
 import { fieldValue } from '../core/shelfmerge.js';
 import { storageEstimate, persistRequest } from '../store/db.js';
-import { remoteBookId } from '../core/bookid.js';
+import { remoteBookId, aliasIds } from '../core/bookid.js';
 import { continueCandidate, touchedAt, ago, DONE_PERCENT } from '../core/recent.js';
 
 const SORTS = [['recent', '最近阅读'], ['title', '书名'], ['added', '加入时间'], ['progress', '阅读进度']];
@@ -82,7 +82,7 @@ export class ShelfView {
     const have = new Set();
     for (const b of books) {
       have.add(b.id);
-      const d = digest[b.id];
+      const d = [digest[b.id], ...aliasIds(b).map((a) => digest[a])].filter(Boolean).sort((x, y) => y.updated - x.updated)[0];
       let percent = b.percent || 0;
       let remoteNote = '';
       if (d && d.updated * 1000 > (b.lastRead || 0) && Math.abs(d.percent - percent) >= 0.5) { percent = d.percent; remoteNote = `${d.device} 读到 ${d.percent.toFixed(1)}%`; }
