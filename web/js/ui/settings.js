@@ -5,6 +5,9 @@ import { loadSettings, saveSettings, applyTheme } from '../store/settings.js';
 import { storageEstimate, persistRequest, storageMode, db } from '../store/db.js';
 import { checkServerUrl } from '../sync/propfind.js';
 import { corsNote } from '../core/origin.js';
+import { CONSENT_TEXT, FALLBACK_VOICES, curateVoices, formatUsage, cloudReady } from '../core/cloudtts.js';
+import { getCloudCfg, saveCloudCfg } from '../store/cloudcfg.js';
+import { CloudApi, CloudEngine } from '../reader/cloudengine.js';
 
 export const APP_VERSION = '0.1.0';
 
@@ -70,6 +73,53 @@ export async function openSettingsDialog({ onChange = () => {} } = {}) {
   };
   refreshStorage();
 
+
+  // ---- online read-aloud (opt-in per device)
+  const cc = getCloudCfg();
+  const api = new CloudApi({ fetchFn: (...a) => fetch(...a), getCfg: getCloudCfg, baseHref: location.href });
+  const cloudMsg = h('p', { class: 'hint', role: 'status' });
+  const cloudOn = h('input', { type: 'checkbox', checked: cc.enabled && cc.consent, id: 'cloud-enabled' });
+  const cloudToken = h('input', { type: 'password', value: cc.token, autocomplete: 'off', spellcheck: false, placeholder: '粘贴管理员给你的令牌', 'aria-label': '在线朗读令牌' });
+  const voiceSel = h('select', { 'aria-label': '在线音色', onchange: () => saveCloudCfg({ voice: voiceSel.value }) });
+  const fillVoices = () => {
+    const c = getCloudCfg();
+    const list = c.voices.length ? c.voices : FALLBACK_VOICES;
+    voiceSel.replaceChildren(h('option', { value: '', text: '自动（按文字语言选择）' }), ...list.map((v) => h('option', { value: v.id, text: `${v.name}（${v.lang}${v.gender ? ' · ' + v.gender : ''}）` })));
+    voiceSel.value = c.voice;
+  };
+  fillVoices();
+  const saveToken = async () => { await saveCloudCfg({ token: cloudToken.value }); };
+  cloudToken.addEventListener('change', saveToken);
+  cloudOn.addEventListener('change', async () => {
+    if (cloudOn.checked) {
+      if (!(await confirmDialog(CONSENT_TEXT, { ok: '同意并开启' }))) { cloudOn.checked = false; return; }
+      await saveCloudCfg({ enabled: true, consent: true, token: cloudToken.value });
+      cloudMsg.textContent = cloudReady(getCloudCfg()) ? '已开启。' : '已开启，但还需要填写令牌。';
+    } else { await saveCloudCfg({ enabled: false }); cloudMsg.textContent = '已关闭，朗读使用浏览器语音。'; }
+  });
+  const guarded = async (label, fn) => {
+    await saveToken();
+    if (!getCloudCfg().token) { cloudMsg.textContent = '请先填写令牌。'; return; }
+    cloudMsg.textContent = label + '…';
+    try { await fn(); } catch (e) { cloudMsg.textContent = (e && e.message) || String(e); }
+  };
+  const usageBtn = h('button', { class: 'btn small', type: 'button', onclick: () => guarded('正在查询用量', async () => { cloudMsg.textContent = '用量：' + (formatUsage(await api.usage()) || '无数据'); }) }, '查看用量');
+  const voicesBtn = h('button', { class: 'btn small', type: 'button', onclick: () => guarded('正在获取音色', async () => {
+    const vs = curateVoices(await api.voices());
+    await saveCloudCfg({ voices: vs });
+    fillVoices();
+    cloudMsg.textContent = `已获取 ${vs.length} 个音色。`;
+  }) }, '刷新音色');
+  const testBtn = h('button', { class: 'btn small', type: 'button', onclick: () => {
+    // the element is created and primed inside this tap, so the browser allows the sample to play
+    const eng = new CloudEngine({ audio: new Audio(), api });
+    eng.prime();
+    guarded('正在合成试听', async () => {
+      const r = await eng.speak('这是在线朗读示例：天地玄黄，宇宙洪荒。', () => true, { cloud: getCloudCfg(), ttsRate: 1 });
+      cloudMsg.textContent = r === 'end' ? '试听成功，令牌和服务器可用。' : (eng.lastError ? eng.lastError.message : '试听失败：无法播放音频（' + r + '）。');
+    });
+  } }, '测试');
+
   const body = [
     h('h3', { text: 'WebDAV 同步（与桌面版 PyReader 共享书库和进度）' }),
     h('div', { class: 'warn', text: '⚠ 账号和密码只保存在本浏览器的 IndexedDB 中（明文），任何能打开这台设备这个浏览器资料的人都能读到。请只在你自己的设备上使用，并使用权限受限的专用账号；公用电脑请不要保存。' }),
@@ -82,6 +132,12 @@ export async function openSettingsDialog({ onChange = () => {} } = {}) {
     h('label', { class: 'field' }, h('span', null, '设备 ID（本设备独有；每台设备只写自己的文件。默认 web-xxxxxx）'), devId),
     h('div', { class: 'row' }, saveBtn, offBtn), msg,
     corsHint,
+    h('h3', { text: '在线朗读（可选）' }),
+    h('p', { class: 'hint', text: CONSENT_TEXT }),
+    h('label', { class: 'row' }, cloudOn, h('span', { text: '启用在线朗读' })),
+    h('label', { class: 'field' }, h('span', null, '访问令牌（只保存在本设备）'), cloudToken),
+    h('label', { class: 'field' }, h('span', null, '音色'), voiceSel),
+    h('div', { class: 'row' }, testBtn, voicesBtn, usageBtn), cloudMsg,
     h('h3', { text: '外观' }), themeSeg,
     h('h3', { text: '存储' }), storageInfo,
     h('div', { class: 'row' },

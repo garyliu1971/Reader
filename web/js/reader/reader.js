@@ -4,6 +4,8 @@ import { h, openPanel, toast, debounce } from '../ui/dom.js';
 import { icon } from '../ui/icons.js';
 import { Paginator } from './paginator.js';
 import { TtsReader, pickVoice } from './tts.js';
+import { CloudEngine, CloudApi } from './cloudengine.js';
+import { getCloudCfg, loadCloudCfg } from '../store/cloudcfg.js';
 import { Translate } from './translate.js';
 import { FindBar } from './find.js';
 import { kvGet, kvSet } from '../store/db.js';
@@ -127,9 +129,14 @@ export class ReaderView {
     r.append(this.trBtn, this.trPop);
     this._ttsMoving = 0;
     this.tts = null;
-    if (TtsReader.supported()) {
+    // online voice engine: opt-in per device (settings), needs <audio>; the browser engine stays the default
+    let cloud = null;
+    if (typeof globalThis.Audio === 'function' && typeof globalThis.fetch === 'function') {
+      cloud = new CloudEngine({ audio: new Audio(), api: new CloudApi({ fetchFn: (...a) => fetch(...a), getCfg: getCloudCfg, baseHref: location.href }) });
+    }
+    if (TtsReader.supported() || cloud) {
       this.tts = new TtsReader({
-        synth: globalThis.speechSynthesis, Utter: globalThis.SpeechSynthesisUtterance,
+        synth: globalThis.speechSynthesis, Utter: globalThis.SpeechSynthesisUtterance, cloud,
         host: {
           text: () => this.pg.fullText(),
           breaks: () => this.pg.breaks,
@@ -138,7 +145,8 @@ export class ReaderView {
           changed: (st) => this.ttsChanged(st),
           finished: () => { if (!this.sleepFired) toast('朗读完毕', { ms: 1800 }); this.sleepFired = false; },
           failed: (m) => { if (m) toast(m, { ms: 6000 }); },
-          settings: () => this.settings || {},
+          notice: (m) => { if (m) toast(m, { ms: 7000 }); },
+          settings: () => ({ ...(this.settings || {}), cloud: getCloudCfg() }),
         },
       });
     } else this.btnTts.hidden = true;
@@ -288,6 +296,7 @@ export class ReaderView {
     this.closeBook();
     try {
       this.settings = await loadSettings();
+      await loadCloudCfg();
       this.applySettings(false);
       const { meta, book } = await openStored(id);
       if (seq !== this.seq) { book.close(); return; }
@@ -491,6 +500,7 @@ export class ReaderView {
   }
 
   ttsChanged(st) {
+    this.mediaSession(st);
     this.root.classList.toggle('tts-on', st !== 'idle');
     this.btnTts.setAttribute('aria-pressed', String(st !== 'idle'));
     this.ttsState.textContent = st === 'paused' ? '已暂停' : '朗读中';
@@ -499,6 +509,23 @@ export class ReaderView {
     if (this.settings) this.ttsRateEl.textContent = this.settings.ttsRate.toFixed(1) + 'x';
     if (st === 'idle' && globalThis.CSS && CSS.highlights) CSS.highlights.delete('tts');
     if (st === 'idle') this.setSleep(null);
+  }
+
+  /** lock-screen / headset controls while reading (helps the OS treat cloud playback as media) */
+  mediaSession(st) {
+    const ms = globalThis.navigator && navigator.mediaSession;
+    if (!ms) return;
+    try {
+      if (st === 'idle') { ms.playbackState = 'none'; return; }
+      ms.playbackState = st === 'paused' ? 'paused' : 'playing';
+      if (!this._msBound) {
+        this._msBound = true;
+        if (globalThis.MediaMetadata) ms.metadata = new MediaMetadata({ title: (this.meta && this.meta.title) || 'PyReader', artist: 'PyReader' });
+        ms.setActionHandler('play', () => this.tts && this.tts.resume());
+        ms.setActionHandler('pause', () => this.tts && this.tts.pause());
+        ms.setActionHandler('stop', () => this.tts && this.tts.stop());
+      }
+    } catch { /* unsupported action */ }
   }
 
   // ------------------------------------------------------------------ sleep timer
