@@ -12,7 +12,7 @@
 // While a newer worker is installing/waiting this worker stops writing revalidated responses into its cache, so the
 // running page keeps getting its own generation's bytes (a lazy import never mixes in the new deploy).
 // Constants repeat js/core/swupdate.js (a classic worker cannot import it); test/swupdate.test.js keeps them equal.
-const CACHE = 'pyreader-web-v11';
+const CACHE = 'pyreader-web-v12';
 const CACHE_PREFIX = 'pyreader-web-';
 const MSG_PING = 'pyreader:ping';
 const MSG_SKIP = 'pyreader:skip-waiting';

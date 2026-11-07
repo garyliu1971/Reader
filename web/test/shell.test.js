@@ -21,6 +21,7 @@ test('service worker: cache name is versioned under the app prefix and only that
   const prefix = /const CACHE_PREFIX = '([^']+)'/.exec(sw)[1];
   assert.ok(prefix.length >= 8 && cache.startsWith(prefix), `${cache} must start with ${prefix}`);
   assert.match(cache, /-v\d+$/);
+  assert.ok(Number(/-v(\d+)$/.exec(cache)[1]) >= 10, 'newer than the pending v8/v9 (live is v7)');
   const activate = /addEventListener\('activate'[\s\S]*?\}\);/.exec(sw)[0];
   assert.match(activate, /k\.startsWith\(CACHE_PREFIX\) && k !== CACHE/);
   assert.ok(!/ks\.filter\(\(k\) => k !== CACHE\)/.test(activate), 'must not delete every other cache');
