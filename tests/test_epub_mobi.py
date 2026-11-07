@@ -1,6 +1,8 @@
 import os
 import zipfile
 import pytest
+from epubfix import comic_epub, text_epub
+from pyreader.comic import ImageEpubError
 from pyreader.textio import load_epub, load_mobi6, load_html_file
 
 P = "这是一段用来填充章节内容的正文，没有任何特别含义，只是为了让章节足够长。" * 6
@@ -200,3 +202,59 @@ def test_real_mobi_salamago():
     assert not any(t.startswith("第 ") and t.endswith(" 部分") for _, t in chs)
     assert chs[0][0] == 0 and [o for o, _ in chs] == sorted(o for o, _ in chs)
     assert "第 1 章" in [t for _, t in chs] and "译后记" in [t for _, t in chs]
+
+
+# ================================================================== 图片型 epub（漫画）：文字书路径的保险丝
+def test_load_epub_refuses_image_only_epub_with_typed_error(tmp_path):
+    p = comic_epub(tmp_path / "c.epub", n=30)
+    with pytest.raises(ImageEpubError):
+        load_epub(p)
+    assert not issubclass(ImageEpubError, OSError)               # 不是文件错误：调用方要能把它和读文件失败区分开
+
+
+def test_load_epub_still_reads_text_epub_and_illustrated_text_epub(tmp_path):
+    text, chs, _ = load_epub(text_epub(tmp_path / "t.epub", n=8))
+    assert text.count("字") == 8 * 400 and chs
+    plated = text_epub(tmp_path / "p.epub", n=10, plates={2, 7})   # 带整页插图的文字书不是漫画
+    assert load_epub(plated)[0].count("字") == 8 * 400
+
+
+def _run_loader(path):
+    pytest.importorskip("PySide6")
+    from pyreader.loader import BookLoader
+    got = {"loaded": [], "failed": []}
+    ld = BookLoader(path)
+    ld.loaded.connect(lambda *a: got["loaded"].append(a))
+    ld.failed.connect(got["failed"].append)
+    ld.run()
+    return got
+
+
+def test_loader_reports_image_epub_with_the_fixed_message_instead_of_loading(tmp_path):
+    from pyreader.comic import IMAGE_EPUB_MESSAGE
+    got = _run_loader(comic_epub(tmp_path / "c.epub", n=30))
+    assert got == {"loaded": [], "failed": [IMAGE_EPUB_MESSAGE]}                   # MainWindow._on_load_failed 认这条消息，改用漫画阅读器
+
+
+def test_loader_ignores_stale_text_cache_for_image_epub(tmp_path):
+    from pyreader.cache import load_cache, save_cache
+    p = comic_epub(tmp_path / "c.epub", n=30)
+    save_cache(p, [(0, "旧章节")], "旧文字书缓存")                    # 老版本把它当文字书解析时留下的缓存
+    assert load_cache(p) is not None                                  # 确实命中缓存，下面才是真的绕过了它
+    from pyreader.comic import IMAGE_EPUB_MESSAGE
+    got = _run_loader(p)
+    assert got["failed"] == [IMAGE_EPUB_MESSAGE] and not got["loaded"]
+
+
+def test_loader_text_epub_still_loads(tmp_path):
+    got = _run_loader(text_epub(tmp_path / "t.epub", n=6))
+    assert len(got["loaded"]) == 1 and not got["failed"]
+
+
+def test_loader_image_epub_from_converted_kindle_is_a_plain_failure(tmp_path, monkeypatch):
+    import pyreader.loader as ld
+    def fake_kindle(path):
+        raise ImageEpubError("转出的 epub 只有图片")
+    monkeypatch.setattr(ld, "load_kindle", fake_kindle)
+    got = _run_loader(str(tmp_path / "b.azw3"))
+    assert got["failed"] == ["转出的 epub 只有图片"]                                   # 漫画阅读器打不开 azw3 原文件：普通失败，消息原样给用户

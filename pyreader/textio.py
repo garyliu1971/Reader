@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from collections import namedtuple
 from urllib.parse import unquote
 from typing import List, Tuple, Optional
+from .comic import IMAGE_EPUB_MESSAGE, ImageEpubError, is_image_epub
 from .config import CHUNK
 
 # ============ 数字解析（中文 / 全角 / 大写 / 罗马 / 英文单词） ============
@@ -570,7 +571,10 @@ def _fallback_html_chapters(doc: _Doc):
 
 def load_epub(path):
     """解析 epub：返回 (全文, 章节[(offset,标题)...], 书名)。
-    章节优先取 epub3 nav / epub2 ncx 目录（支持 file#id 锚点）；目录不可信时退回 h1-h3 标题 / 正文扫描。"""
+    章节优先取 epub3 nav / epub2 ncx 目录（支持 file#id 锚点）；目录不可信时退回 h1-h3 标题 / 正文扫描。
+    只有图片的 epub（漫画）抛 ImageEpubError：当文字书读只会得到几乎空白的一页（正常路径在 MainWindow.load_book 就分流了，这里是保险）。"""
+    if is_image_epub(path):
+        raise ImageEpubError(IMAGE_EPUB_MESSAGE)
     with zipfile.ZipFile(path) as z:
         names = set(z.namelist())
         container = ET.fromstring(z.read("META-INF/container.xml"))
