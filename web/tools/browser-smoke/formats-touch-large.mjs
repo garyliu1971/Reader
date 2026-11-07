@@ -30,9 +30,9 @@ const ok = (cond, msg, extra = '') => { console.log(`${cond ? 'PASS' : 'FAIL'}  
   ok(Math.abs(pct - 63) < 1, 'big txt: seek 63%', `pct=${pct.toFixed(2)}`);
   const tSearch = Date.now();
   await page.keyboard.press('/'); await wait(300);
-  await page.fill('.panel input[type=search]', '这座城市从不等待'); await wait(300);
-  await page.waitForFunction(() => /共 \d+\+?/.test(document.querySelector('.panel .hint')?.textContent || ''), null, { timeout: 60000 });
-  console.log('search over 13MB ms', Date.now() - tSearch, await page.textContent('.panel .hint'));
+  await page.fill('.find-input', '这座城市从不等待'); await wait(300);
+  await page.waitForFunction(() => /^\d+ \/ \d+\+?$/.test(document.querySelector('.find-count').textContent), null, { timeout: 60000 });
+  console.log('search over 13MB ms', Date.now() - tSearch, await page.textContent('.find-count'));
   await page.keyboard.press('Escape'); await wait(300);
 
   // ---- PDF
