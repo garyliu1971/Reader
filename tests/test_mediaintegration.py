@@ -23,6 +23,7 @@ from pyreader import shelfsync as ss  # noqa: E402
 from pyreader import shelfview as sv  # noqa: E402
 from pyreader import sync  # noqa: E402
 from pyreader.webdav import WebDavClient  # noqa: E402
+from epubfix import comic_epub, text_epub  # noqa: E402
 
 try:
     from pyreader.audioplayer import audio_available
@@ -277,7 +278,8 @@ def test_comic_options_persist(win, tmp_path):
     win.load_book(p)
     win.comic.set_rtl(True)
     win.comic.set_fit_mode("width")
-    assert win.cfg["comic_rtl"] is True and win.cfg["comic_fit"] == "width"
+    assert win.bookmarks[p]["_comic_rtl"] is True and "comic_rtl" not in win.cfg     # 方向按书记，不动全局设置
+    assert win.cfg["comic_fit"] == "width"
     win.show_shelf()
     win.comic.blockSignals(True)                                                    # 控件自己的状态被改回默认（不触发保存）
     win.comic.set_rtl(False)
@@ -640,3 +642,179 @@ def test_sync_push_skips_record_older_than_one_already_queued(monkeypatch):
     for t in (t_new, t_old, t_other):
         t.join(5)
     assert sorted(sent) == [50.0, 200.0]
+
+
+# ================================================================== 图片型 epub（漫画）走应用内漫画阅读器
+class _NoTextLoader:
+    """BookLoader 的替身：只要被构造就说明图片型 epub 掉进了文字书路径。"""
+    built = []
+
+    def __init__(self, path):
+        _NoTextLoader.built.append(path)
+        raise AssertionError("图片型 epub 不应该走文字书的 BookLoader")
+
+
+class _StubLoader(QObject):
+    loaded, failed, progress = Signal(str, list, str, object), Signal(str), Signal(int, str)
+    built = []
+
+    def __init__(self, path):
+        super().__init__()
+        _StubLoader.built.append(path)
+
+    def run(self):
+        pass
+
+
+def test_image_epub_routes_to_comic_and_never_builds_text_loader(win, tmp_path, monkeypatch):
+    import pyreader.mainwin as mw
+    from pyreader.cache import load_cache, save_cache
+    monkeypatch.setattr(mw, "BookLoader", _NoTextLoader)
+    p = comic_epub(tmp_path / "漫画.epub", n=9, png=png_bytes())
+    save_cache(p, [(0, "旧章节")], "旧文字书缓存")                                   # 老版本留下的 17 字符「文字书」缓存
+    assert load_cache(p) is not None
+    win.load_book(p)
+    assert win.stack.currentWidget() is win.comic and win.comic.is_open() and win.comic.page_count() == 10
+    assert win._media["kind"] == "comic" and not win._text_active and not win._shelf_open_pending
+    assert win.pulled == [p] and win.external == [] and win.windowTitle() == "漫画.epub — PyReader"
+    win.show_shelf()
+
+
+def test_text_epub_still_goes_to_text_loader(win, tmp_path, monkeypatch):
+    import pyreader.mainwin as mw
+    monkeypatch.setattr(mw, "BookLoader", _StubLoader)
+    _StubLoader.built.clear()
+    p = text_epub(tmp_path / "t.epub", n=6)
+    win.load_book(p)
+    assert _StubLoader.built == [p] and win._media is None and win._text_active and win._reader_visible()
+
+
+def test_shelf_open_of_image_epub_does_not_wait_for_text_load(win, tmp_path, monkeypatch):
+    import pyreader.mainwin as mw
+    monkeypatch.setattr(mw, "BookLoader", _StubLoader)
+    _StubLoader.built.clear()
+    c = comic_epub(tmp_path / "c.epub", n=4, png=png_bytes())
+    win._open_from_shelf(c)
+    assert win._media is not None and not win._shelf_open_pending and not _StubLoader.built      # 媒体同步打开：不挂「失败回书架」
+    win.show_shelf()
+    t = text_epub(tmp_path / "t.epub", n=4)
+    win._open_from_shelf(t)
+    assert win._shelf_open_pending and _StubLoader.built == [t]                                  # 文字书照旧
+
+
+def test_image_epub_open_also_works_in_read_only_shelf_instance(win, tmp_path):
+    from pyreader.mainwin import MainWindow
+    w2 = MainWindow()                                                               # 第一个窗口占着书架锁：这个以只读模式打开
+    try:
+        assert w2.shelf.read_only
+        w2.sync.push = lambda cfg, rec: None
+        w2.sync.pull = lambda cfg, path: None
+        p = comic_epub(tmp_path / "ro.epub", n=3, png=png_bytes())
+        w2._open_from_shelf(p)
+        assert w2._media is not None and w2.comic.page_count() == 4 and not w2._shelf_open_pending
+        w2.show_shelf()
+    finally:
+        w2._progress_timer.stop()
+        w2._resize_timer.stop()
+        w2.close()
+        w2.deleteLater()
+
+
+def test_image_epub_safety_net_reroutes_text_loader_result_to_comic(win, tmp_path, monkeypatch):
+    """load_book 的预判没拦住（这里假装判不出来）时，loader 读 epub 抛 ImageEpubError，主窗口改用漫画阅读器而不是弹错误 / 留空白页。"""
+    import pyreader.mainwin as mw
+    from pyreader.cache import save_cache
+    errors = []
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: errors.append(a))
+    monkeypatch.setattr(mw.comicmod, "is_image_epub", lambda path: False)           # 只换掉 mainwin 的预判（textio 持有自己的引用）
+    p = comic_epub(tmp_path / "net.epub", n=5, png=png_bytes())
+    save_cache(p, [(0, "旧章节")], "旧文字书缓存")                                   # 缓存命中路径也要被拦下
+    win._open_from_shelf(p)
+    assert win._shelf_open_pending                                                  # 走到了文字书路径
+    assert wait_for(lambda: win._media is not None)
+    assert win.comic.is_open() and win.comic.page_count() == 6 and win.stack.currentWidget() is win.comic
+    assert errors == [] and not win._shelf_open_pending and not win._text_active
+    win.show_shelf()
+
+
+def test_image_epub_safety_net_returns_to_shelf_when_comic_view_cannot_open_it(win, tmp_path, monkeypatch):
+    import pyreader.mainwin as mw
+    errors = []
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: errors.append(a))
+    p = comic_epub(tmp_path / "x.epub", n=3, png=png_bytes())
+    win._on_load_failed(mw.comicmod.IMAGE_EPUB_MESSAGE)                             # 没有当前书（book_path 还是 None）：不能改用漫画阅读器，按普通失败处理
+    assert win._media is None and len(errors) == 1
+    errors.clear()
+    win.book_path = p
+    win.show_reader()
+    opened = []
+    monkeypatch.setattr(win, "_open_media", lambda path, kind: opened.append((path, kind)))      # 漫画阅读器打不开：_media 仍是 None
+    win._on_load_failed(mw.comicmod.IMAGE_EPUB_MESSAGE)
+    assert opened == [(p, "comic")] and win._shelf_visible() and errors == []       # 不停在没内容的阅读页，也不弹错误
+    win._on_load_failed("真正的失败")                                                  # 别的失败照旧弹错误
+    assert len(errors) == 1
+
+
+def test_image_epub_progress_by_page_survives_reopen_and_text_kind_remote_is_ignored(win, tmp_path):
+    win.cfg["comic_spread"] = False                                                 # 单页显示：一屏一页，百分比按页号算
+    p = comic_epub(tmp_path / "prog.epub", n=99, png=png_bytes())                   # 封面 + 99 页 = 100 页
+    bid = sync.book_id(p)
+    win.load_book(p)
+    assert win._media["bid"] == bid and win.comic.page_count() == 100
+    win.comic.go_to(61)
+    assert win.bookmarks[p]["_progress_page"] == 61
+    rec = win.pushed[-1]
+    assert (rec["kind"], rec["page"], rec["book_id"]) == ("comic", 61, bid) and rec["percent"] == pytest.approx(61 / 99 * 100, abs=0.01)
+    win.show_shelf()
+    win.load_book(p)
+    assert win.comic.current_page() == 61 and win._media["start"] == 61             # 关掉再开：回到第 61 页
+    # PWA 曾为这本书写下的假 100%（文字书记录：没有 kind）：不能当成漫画位置采信，也不能让程序出错
+    win._on_remote_progress(p, sync.make_record(bid, 0, 100.0, "", "phone", updated=time.time() + 60))
+    assert win.comic.current_page() == 61 and win.bookmarks[p]["_progress_page"] == 61 and "_progress_" not in win.bookmarks[p]
+    win._on_remote_progress(p, sync.make_media_record(bid, "comic", 80.0, "phone", page=80, updated=time.time() + 120))
+    assert win.comic.current_page() == 80                                           # 同类型（comic）的更新记录照常生效
+    win.show_shelf()
+
+
+def test_comic_direction_is_remembered_per_book(win, tmp_path):
+    from pyreader.config import BOOKMARKS_PATH, load_json
+    png = png_bytes()
+    a = comic_epub(tmp_path / "a.epub", n=4, png=png, ppd="rtl")                    # OPF 声明从右往左
+    b = comic_epub(tmp_path / "b.epub", n=4, png=png)                               # 什么都没声明
+    z = write_cbz(tmp_path / "z.cbz", pages=3)
+    win.load_book(a)
+    assert win.comic.rtl() is True and "_comic_rtl" not in win.bookmarks.get(a, {})     # 按 OPF；只是打开不写任何东西
+    win.comic.set_rtl(False)                                                        # 用户在这本书上改成从左往右
+    assert win.bookmarks[a]["_comic_rtl"] is False and "comic_rtl" not in win.cfg   # 只记这本，全局不动
+    win.show_shelf()
+    win.load_book(b)
+    assert win.comic.rtl() is False                                                 # 没有记过、OPF 也没写：全局默认（没设过 = 从左往右），不带上 a 的方向
+    win.comic.set_rtl(True)
+    assert win.bookmarks[b]["_comic_rtl"] is True and "_comic_rtl" in win.bookmarks[a] and "comic_rtl" not in win.cfg
+    win.show_shelf()
+    win.load_book(z)
+    assert win.comic.rtl() is False and "_comic_rtl" not in win.bookmarks.get(z, {})   # 没记过的 zip / cbz：行为同旧版（全局默认）
+    win.show_shelf()
+    win.cfg["comic_rtl"] = True                                                     # 全局设置仍是没记过的书的默认
+    win.load_book(z)
+    assert win.comic.rtl() is True
+    win.comic.set_rtl(False)
+    assert win.bookmarks[z]["_comic_rtl"] is False and win.cfg["comic_rtl"] is True
+    win.show_shelf()
+    win.load_book(a)
+    assert win.comic.rtl() is False                                                 # 记过的 > OPF 声明的 > 全局设置
+    win.show_shelf()
+    win.load_book(b)
+    assert win.comic.rtl() is True
+    win.show_shelf()
+    disk = load_json(BOOKMARKS_PATH, {})
+    assert (disk[a]["_comic_rtl"], disk[b]["_comic_rtl"], disk[z]["_comic_rtl"]) == (False, True, False)       # 落盘了，重启后还在
+
+
+def test_fit_and_spread_toggles_do_not_record_a_direction(win, tmp_path):
+    p = comic_epub(tmp_path / "f.epub", n=4, png=png_bytes(), ppd="rtl")
+    win.load_book(p)
+    win.comic.set_fit_mode("width")
+    win.comic.set_spread(True)
+    assert "_comic_rtl" not in win.bookmarks.get(p, {}) and win.cfg["comic_fit"] == "width" and win.cfg["comic_spread"] is True
+    win.show_shelf()
