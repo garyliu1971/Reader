@@ -10,7 +10,11 @@ import { kvGet, kvSet } from '../store/db.js';
 import { openStored, touchRead, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
+import { aliasIds, localBookId } from '../core/bookid.js';
+import { normalizeSelection } from '../parse/pdftext.js';
 import { DWELL_MS } from '../core/recent.js';
+import { navDir } from '../core/search.js';
+import { makeTimer, isDue, timerLabel, activeChoice, SLEEP_MINUTES } from '../core/sleeptimer.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
 const TAP_ZONE = 0.3;
@@ -78,12 +82,16 @@ export class ReaderView {
     this.ttsState = h('span', { class: 'state', 'aria-live': 'polite' }, '朗读中');
     this.ttsPlay = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '暂停朗读', onclick: () => this.ttsPauseResume() }, icon('pause'));
     this.ttsRateEl = h('span', { class: 'rate' }, '1.0x');
+    this.sleep = null;       // sleep timer (core/sleeptimer.js); only lives while reading aloud
+    this.sleepTick = 0;
+    this.ttsSleep = h('button', { class: 'sleep-btn', type: 'button', 'aria-label': '睡眠定时', onclick: () => this.openSleepMenu() }, '定时');
     this.ttsBar = h('div', { class: 'tts-bar', role: 'toolbar', 'aria-label': '朗读控制' },
       this.ttsState,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '减慢语速', onclick: () => this.ttsStep(-0.1) }, '−'),
       this.ttsRateEl,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '加快语速', onclick: () => this.ttsStep(0.1) }, '+'),
       this.ttsPlay,
+      this.ttsSleep,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '停止朗读', onclick: () => this.tts && this.tts.stop() }, icon('stop')));
     this.loading = h('div', { class: 'loading', role: 'status' }, '正在打开…');
     this.contentS = -1;   // section whose text is laid out in the paginator (this.s is already the new one while it loads)
@@ -128,7 +136,7 @@ export class ReaderView {
           reveal: (a, b) => this.ttsReveal(a, b),
           nextSection: () => this.ttsNextSection(),
           changed: (st) => this.ttsChanged(st),
-          finished: () => toast('朗读完毕', { ms: 1800 }),
+          finished: () => { if (!this.sleepFired) toast('朗读完毕', { ms: 1800 }); this.sleepFired = false; },
           failed: (m) => { if (m) toast(m, { ms: 6000 }); },
           settings: () => this.settings || {},
         },
@@ -234,6 +242,8 @@ export class ReaderView {
       }
       const overlay = document.querySelector('.overlay-root:not(.side-sheet)');
       if (mod && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F') && !overlay && this.book && !this.pdf) { e.preventDefault(); this.openSearch(); return; }   // a PDF has no text: leave the browser's own find alone
+      const nav = !overlay && this.find.isOpen ? navDir(e) : 0;   // F3 / Ctrl+G: next hit, Shift = previous
+      if (nav) { e.preventDefault(); this.find.step(nav); return; }
       if (overlay || mod || e.altKey) return;
       switch (e.key) {
         case 'ArrowRight': case 'ArrowDown': case 'PageDown': this.next(); break;
@@ -242,7 +252,6 @@ export class ReaderView {
         case 'Home': this.seekPercent(0); break;
         case 'End': this.seekPercent(100); break;
         case 'Escape': if (!this.trPop.hidden || !this.trBtn.hidden) this.hideTr(); else if (this.find.isOpen) this.find.close(); else if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
-        case 'F3': if (this.find.isOpen) this.find.step(e.shiftKey ? -1 : 1); else return; break;
         case 't': case 'T': this.openToc('toc'); break;
         case 'b': case 'B': this.toggleBookmark(); break;
         case '/': e.preventDefault(); this.openSearch(); break;
@@ -342,7 +351,7 @@ export class ReaderView {
     if (this.book) { try { this.book.close(); } catch { /* ignore */ } }
     this.book = null;
     this.content.replaceChildren();
-    if (this.pdfCanvas) { this.pdfCanvas.remove(); this.pdfCanvas = null; }
+    if (this.pdfWrap) { this.pdfWrap.remove(); this.pdfWrap = null; this.pdfCanvas = null; this.pdfText = null; }
   }
 
   close() {
@@ -378,14 +387,14 @@ export class ReaderView {
 
   // ------------------------------------------------------------------ translate selection (Translator API)
   onSelection() {
-    if (!this.tr || !this.active || this.pdf || !this.book) { this.hideTr(); return; }
+    if (!this.tr || !this.active || !this.book) { this.hideTr(); return; }
     if (this._ptrDown) return;
     const sel = globalThis.getSelection && getSelection();
     if (!sel || !sel.rangeCount) { this.hideTr(); return; }
     const range = sel.getRangeAt(0);
     if (this.trPop.contains(range.commonAncestorContainer)) return;   // selecting inside the translation itself
-    const text = sel.toString();
-    if (sel.isCollapsed || !text.trim() || !this.content.contains(range.commonAncestorContainer)) { this.hideTr(); return; }
+    const text = this.pdf ? normalizeSelection(sel.toString()) : sel.toString();
+    if (sel.isCollapsed || !text.trim() || !(this.pdf ? this.pdfText : this.content).contains(range.commonAncestorContainer)) { this.hideTr(); return; }
     const rects = range.getClientRects();
     const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
     const first = rects.length ? rects[0] : last;
@@ -489,6 +498,44 @@ export class ReaderView {
     this.ttsPlay.setAttribute('aria-label', st === 'paused' ? '继续朗读' : '暂停朗读');
     if (this.settings) this.ttsRateEl.textContent = this.settings.ttsRate.toFixed(1) + 'x';
     if (st === 'idle' && globalThis.CSS && CSS.highlights) CSS.highlights.delete('tts');
+    if (st === 'idle') this.setSleep(null);
+  }
+
+  // ------------------------------------------------------------------ sleep timer
+  /** arm (or with null, cancel) the timer; the countdown is polled against the clock so a throttled background tab still stops on time */
+  setSleep(t) {
+    clearInterval(this.sleepTick);
+    this.sleepTick = 0;
+    this.sleep = t;
+    this.ttsSleep.classList.toggle('on', !!t);
+    this.ttsSleep.textContent = timerLabel(t, Date.now());
+    this.ttsSleep.setAttribute('aria-label', t ? `睡眠定时：${this.ttsSleep.textContent}，点按更改或取消` : '睡眠定时');
+    if (t && t.kind === 'time') this.sleepTick = setInterval(() => this.sleepCheck(), 500);
+  }
+
+  sleepCheck() {
+    if (!this.sleep) return;
+    if (isDue(this.sleep, Date.now())) this.sleepStop();
+    else this.ttsSleep.textContent = timerLabel(this.sleep, Date.now());
+  }
+
+  sleepStop() {
+    if (this.tts) this.tts.stop();   // goes idle -> clears the timer
+    toast('睡眠定时已到，已停止朗读', { ms: 3000 });
+  }
+
+  openSleepMenu() {
+    if (!this.tts || this.tts.state === 'idle') return;
+    const on = activeChoice(this.sleep);
+    const pick = (choice) => { p.close(); this.setSleep(makeTimer(choice, Date.now())); };
+    const item = (label, choice) => h('li', { 'aria-current': on === choice ? 'true' : null }, h('button', { type: 'button', onclick: () => pick(choice) }, label));
+    const p = openPanel({
+      title: '睡眠定时', side: 'dialog', label: '睡眠定时',
+      content: h('ul', { class: 'list' },
+        ...SLEEP_MINUTES.map((m) => item(`${m} 分钟后停止`, m)),
+        item('读完本章后停止', 'chapter'),
+        ...(this.sleep ? [h('li', null, h('button', { type: 'button', class: 'danger', onclick: () => { p.close(); this.setSleep(null); } }, '取消定时'))] : [])),
+    });
   }
 
   /** called before each sentence is spoken: bring it into view (turning the page if needed) and highlight it */
@@ -503,6 +550,12 @@ export class ReaderView {
   }
 
   async ttsNextSection() {
+    if (this.sleep && this.sleep.kind === 'chapter') {   // chapter read to its end: stop here instead of rolling on (the tts loop then goes idle)
+      this.sleepFired = true;
+      this.setSleep(null);
+      toast('睡眠定时已到，已停止朗读', { ms: 3000 });
+      return false;
+    }
     if (!this.book || this.s >= this.book.sections.length - 1) return false;
     this._ttsMoving++;
     try { await this.showSection(this.s + 1, { start: true }); } finally { this._ttsMoving--; }
@@ -776,12 +829,12 @@ export class ReaderView {
     const rec = { bid: this.meta.id, anchor: this.anchor(), percent: Math.round(pct * 1000) / 1000, updated: stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0), chapter: this.sectionTitle() };
     this.lastSaved = rec;
     try { await saveProgress(rec); } catch (e) { console.warn('[progress] save failed', e); }
-    this.ctx.onProgress({ bid: rec.bid, percent: rec.percent, chapter: rec.chapter, updated: rec.updated });
+    this.ctx.onProgress({ bid: rec.bid, aliases: aliasIds(this.meta), percent: rec.percent, chapter: rec.chapter, updated: rec.updated });
   }
 
   async checkRemote(saved) {
     try {
-      const remote = await this.ctx.fetchRemoteProgress(this.meta.id);
+      const remote = await this.ctx.fetchRemoteProgress(this.meta.id, aliasIds(this.meta));
       if (!remote || !this.active || !this.meta) return;
       const localTs = saved ? saved.updated : 0;
       if (remote.updated <= localTs || Math.abs(remote.percent - this.percent()) < 0.5) return;
@@ -899,7 +952,9 @@ export class ReaderView {
   async openPdfAt(page) {
     this.pdfPage = Math.max(0, Math.min(this.book.pageCount - 1, page || 0));
     this.pdfCanvas = h('canvas', { 'aria-label': 'PDF 页面', role: 'img' });
-    this.frame.append(this.pdfCanvas);
+    this.pdfText = h('div', { class: 'pdf-text' });   // invisible selectable text over the canvas
+    this.pdfWrap = h('div', { class: 'pdf-page' }, this.pdfCanvas, this.pdfText);
+    this.frame.append(this.pdfWrap);
     this.frame.classList.remove('scroll');
     await this.renderPdf();
     this.updateUi();
@@ -911,7 +966,7 @@ export class ReaderView {
     if (!this.pdf || !this.pdfCanvas) return;
     this.pdfCanvas.classList.toggle('invert', isDarkNow());
     const w = this.frame.clientWidth - 8, hgt = this.frame.clientHeight - 8;
-    try { await this.book.render(this.pdfPage, this.pdfCanvas, Math.max(50, w), Math.max(50, hgt)); } catch (e) { toast('渲染失败：' + e.message); }
+    try { await this.book.render(this.pdfPage, this.pdfCanvas, Math.max(50, w), Math.max(50, hgt), this.pdfText); } catch (e) { toast('渲染失败：' + e.message); }
   }
   async setPdfPage(p, user) {
     this.pdfPage = p;
