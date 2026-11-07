@@ -88,6 +88,25 @@ try {
   ok(stub.speak.every((b) => b.text.length <= 200 && b.voice), 'each request <=200 chars with a voice');
   await page.keyboard.press('r'); await wait(300);
 
+  // ---- reader panel: engine status line, online voice group, live updates
+  await page.evaluate(() => window.__pyreader.reader.openSettings()); await wait(400);
+  const sel = page.locator('.panel select[aria-label="朗读音色"]');
+  const stat = page.locator('.panel [data-tts-status]');
+  ok((await stat.textContent()).startsWith('当前使用：在线语音（'), 'panel status shows online voice', await stat.textContent());
+  ok((await sel.locator('optgroup[label="在线（Azure）"] option').count()) >= 3, 'online group in the voice dropdown');
+  await sel.selectOption('cloud:en-US-AriaNeural'); await wait(300);
+  ok((await page.evaluate(async () => (await import('/js/store/cloudcfg.js')).getCloudCfg().voice)) === 'en-US-AriaNeural', 'choosing an online voice stores the cloud voice');
+  ok((await stat.textContent()).includes('Aria'), 'status follows the choice');
+  await sel.selectOption('v'); await wait(300);
+  ok((await stat.textContent()) === '当前使用：浏览器语音', 'browser voice -> browser engine');
+  await sel.selectOption('cloud:'); await wait(200);
+  await page.evaluate(async () => (await import('/js/store/cloudcfg.js')).saveCloudCfg({ enabled: false })); await wait(300);
+  ok((await stat.textContent()).includes('已填写令牌，但未启用在线朗读'), 'open panel updates when settings change (token but disabled)');
+  ok((await sel.locator('optgroup').count()) === 0, 'online group hidden when not ready');
+  await page.evaluate(async () => (await import('/js/store/cloudcfg.js')).saveCloudCfg({ enabled: true })); await wait(300);
+  ok((await stat.textContent()).startsWith('当前使用：在线语音'), 'panel updates when re-enabled');
+  await page.keyboard.press('Escape'); await wait(300);
+
   // ---- quota -> automatic fallback to the browser voice
   stub.mode = 'quota';
   await page.keyboard.press('r'); await wait(1500);

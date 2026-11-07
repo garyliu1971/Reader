@@ -12,7 +12,7 @@
 // While a newer worker is installing/waiting this worker stops writing revalidated responses into its cache, so the
 // running page keeps getting its own generation's bytes (a lazy import never mixes in the new deploy).
 // Constants repeat js/core/swupdate.js (a classic worker cannot import it); test/swupdate.test.js keeps them equal.
-const CACHE = 'pyreader-web-v12';
+const CACHE = 'pyreader-web-v13';
 const CACHE_PREFIX = 'pyreader-web-';
 const MSG_PING = 'pyreader:ping';
 const MSG_SKIP = 'pyreader:skip-waiting';
@@ -23,7 +23,7 @@ const SHELL = [
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png',
   'js/app.js', 'js/library.js',
   'js/core/anchor.js', 'js/core/bookid.js', 'js/core/chapters.js', 'js/core/comic.js', 'js/core/cloudtts.js', 'js/core/handoff.js', 'js/core/names.js', 'js/core/origin.js', 'js/core/progress.js', 'js/core/sha1.js',
-  'js/core/recent.js', 'js/core/search.js', 'js/core/shelfmerge.js', 'js/core/sleeptimer.js', 'js/core/swupdate.js', 'js/core/textenc.js',
+  'js/core/recent.js', 'js/core/search.js', 'js/core/shelfmerge.js', 'js/core/sleeptimer.js', 'js/core/swupdate.js', 'js/core/textenc.js', 'js/core/ttsux.js',
   'js/parse/epub.js', 'js/parse/mobi.js', 'js/parse/mobicheck.js', 'js/parse/pdf.js', 'js/parse/pdftext.js', 'js/parse/sanitize.js', 'js/parse/textbooks.js', 'js/parse/txt.worker.js', 'js/parse/txtparse.js',
   'js/reader/cloudengine.js', 'js/reader/find.js', 'js/reader/paginator.js', 'js/reader/reader.js', 'js/reader/tts.js', 'js/reader/translate.js',
   'js/store/cloudcfg.js', 'js/store/db.js', 'js/store/settings.js',

@@ -2,7 +2,8 @@
 // stall in several browsers), highlights it and turns pages through the `host`, and continues into the next chapter.
 // Everything browser-specific is injected (synth, Utter, cloud engine), so the loop is unit-tested with fakes.
 // Two engines behind one contract: BrowserEngine (speechSynthesis, default) and CloudEngine (reader/cloudengine.js, opt-in).
-import { cloudReady, cloudHint, PREFETCH_AHEAD } from '../core/cloudtts.js';
+import { cloudHint, PREFETCH_AHEAD } from '../core/cloudtts.js';
+import { cloudActive } from '../core/ttsux.js';
 
 const END_MARKS = new Set('。！？!?；;…');
 const CLOSERS = new Set('”’」』）)"\'】》>〉]');
@@ -130,7 +131,7 @@ export class TtsReader {
 
   _set(state) { if (this.state !== state) { this.state = state; this.host.changed(state); } }
   _notice(msg) { (this.host.notice || this.host.failed).call(this.host, msg); }
-  _cloudOn() { const c = (this.host.settings() || {}).cloud; return !!(this.cloud && cloudReady(c)); }
+  _cloudOn() { const c = (this.host.settings() || {}).cloud; return !!(this.cloud && cloudActive(c)); }
   _cancelEngines() { this.browser.cancel(); if (this.cloud) this.cloud.cancel(); }
 
   /** (re)start reading from the sentence that contains/follows `fromOffset` of the current section */

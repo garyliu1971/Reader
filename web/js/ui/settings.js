@@ -6,7 +6,8 @@ import { storageEstimate, persistRequest, storageMode, db } from '../store/db.js
 import { checkServerUrl } from '../sync/propfind.js';
 import { corsNote } from '../core/origin.js';
 import { CONSENT_TEXT, FALLBACK_VOICES, curateVoices, formatUsage, cloudReady } from '../core/cloudtts.js';
-import { getCloudCfg, saveCloudCfg } from '../store/cloudcfg.js';
+import { getCloudCfg, saveCloudCfg, onCloudCfgChange } from '../store/cloudcfg.js';
+import { tokenIncomplete, HINT_INCOMPLETE } from '../core/ttsux.js';
 import { CloudApi, CloudEngine } from '../reader/cloudengine.js';
 
 export const APP_VERSION = '0.1.0';
@@ -80,20 +81,30 @@ export async function openSettingsDialog({ onChange = () => {} } = {}) {
   const cloudMsg = h('p', { class: 'hint', role: 'status' });
   const cloudOn = h('input', { type: 'checkbox', checked: cc.enabled && cc.consent, id: 'cloud-enabled' });
   const cloudToken = h('input', { type: 'password', value: cc.token, autocomplete: 'off', spellcheck: false, placeholder: '粘贴管理员给你的令牌', 'aria-label': '在线朗读令牌' });
-  const voiceSel = h('select', { 'aria-label': '在线音色', onchange: () => saveCloudCfg({ voice: voiceSel.value }) });
+  const voiceSel = h('select', { 'aria-label': '在线音色', onchange: () => saveCloudCfg({ voice: voiceSel.value, engine: 'cloud' }) });
   const fillVoices = () => {
     const c = getCloudCfg();
     const list = c.voices.length ? c.voices : FALLBACK_VOICES;
     voiceSel.replaceChildren(h('option', { value: '', text: '自动（按文字语言选择）' }), ...list.map((v) => h('option', { value: v.id, text: `${v.name}（${v.lang}${v.gender ? ' · ' + v.gender : ''}）` })));
     voiceSel.value = c.voice;
   };
-  fillVoices();
+  // inline hint: a saved token that is not usable yet must not silently fall back to the browser voice
+  const cloudWarn = h('p', { class: 'warn', role: 'status' });
+  const refreshCloud = () => {
+    const c = getCloudCfg();
+    cloudWarn.hidden = !tokenIncomplete(c);
+    cloudWarn.textContent = HINT_INCOMPLETE + '：勾选上方“启用在线朗读”并同意后才会使用在线语音，目前朗读仍用浏览器语音。';
+    cloudOn.checked = c.enabled && c.consent;
+    fillVoices();
+  };
+  const offCloud = onCloudCfgChange(refreshCloud);
+  refreshCloud();
   const saveToken = async () => { await saveCloudCfg({ token: cloudToken.value }); };
   cloudToken.addEventListener('change', saveToken);
   cloudOn.addEventListener('change', async () => {
     if (cloudOn.checked) {
       if (!(await confirmDialog(CONSENT_TEXT, { ok: '同意并开启' }))) { cloudOn.checked = false; return; }
-      await saveCloudCfg({ enabled: true, consent: true, token: cloudToken.value });
+      await saveCloudCfg({ enabled: true, consent: true, engine: 'cloud', token: cloudToken.value });
       cloudMsg.textContent = cloudReady(getCloudCfg()) ? '已开启。' : '已开启，但还需要填写令牌。';
     } else { await saveCloudCfg({ enabled: false }); cloudMsg.textContent = '已关闭，朗读使用浏览器语音。'; }
   });
@@ -136,7 +147,7 @@ export async function openSettingsDialog({ onChange = () => {} } = {}) {
     h('p', { class: 'hint', text: CONSENT_TEXT }),
     h('label', { class: 'row' }, cloudOn, h('span', { text: '启用在线朗读' })),
     h('label', { class: 'field' }, h('span', null, '访问令牌（只保存在本设备）'), cloudToken),
-    h('label', { class: 'field' }, h('span', null, '音色'), voiceSel),
+    h('label', { class: 'field' }, h('span', null, '音色'), voiceSel), cloudWarn,
     h('div', { class: 'row' }, testBtn, voicesBtn, usageBtn), cloudMsg,
     h('h3', { text: '外观' }), themeSeg,
     h('h3', { text: '存储' }), storageInfo,
@@ -152,5 +163,5 @@ export async function openSettingsDialog({ onChange = () => {} } = {}) {
       h('dt', { text: '设备 ID' }), h('dd', { text: syncMgr.cfg.deviceId }),
       h('dt', { text: '数据' }), h('dd', { text: '书籍、封面、进度、书签、设置都保存在本浏览器（IndexedDB）。书签/笔记不会同步（桌面版也不同步 bookmarks.json）。' })),
   ];
-  return openPanel({ title: '设置', side: 'dialog', wide: true, content: body });
+  return openPanel({ title: '设置', side: 'dialog', wide: true, content: body, onClose: offCloud });
 }

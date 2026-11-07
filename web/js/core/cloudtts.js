@@ -4,7 +4,7 @@
 
 export const MAX_TEXT = 200;
 export const PREFETCH_AHEAD = 3;
-export const CLOUD_DEFAULTS = { enabled: false, consent: false, token: '', voice: '', voices: [] };
+export const CLOUD_DEFAULTS = { enabled: false, consent: false, token: '', voice: '', voices: [], engine: 'cloud' };
 
 export const CONSENT_TEXT = '开启后，正在朗读的书籍文字（逐句）会发送到本应用的服务器，并由服务器转发给 Azure / edge-tts 合成语音。请勿朗读不希望外传的内容。默认关闭，仅在本设备生效。';
 
@@ -22,7 +22,7 @@ const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
 export function normalizeCloud(c) {
   const o = { ...CLOUD_DEFAULTS, ...(c || {}) };
   o.enabled = !!o.enabled; o.consent = !!o.consent;
-  o.token = str(o.token, 512).trim(); o.voice = str(o.voice, 120);
+  o.token = str(o.token, 512).trim(); o.voice = str(o.voice, 120); o.engine = o.engine === 'browser' ? 'browser' : 'cloud';
   o.voices = Array.isArray(o.voices) ? o.voices.filter((v) => v && typeof v.id === 'string').slice(0, 40).map((v) => ({ id: str(v.id, 120), name: str(v.name, 80) || str(v.id, 120), lang: str(v.lang, 20), gender: str(v.gender, 12) })) : [];
   return o;
 }
