@@ -292,6 +292,11 @@ export class ShelfView {
   }
 
   async importFiles(files) {
+    this.importing = (this.importing || 0) + 1;   // the update prompt asks before reloading mid-import
+    try { await this._importFiles(files); } finally { this.importing--; }
+  }
+
+  async _importFiles(files) {
     if (!files.length) return;
     persistRequest().catch(() => {});
     let ok = 0, dup = 0;
