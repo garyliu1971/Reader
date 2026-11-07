@@ -41,20 +41,24 @@ export async function allBooks() { return db.getAll('books'); }
  * Import a File/Blob. `remote` = {rel, size, mtime} when it was downloaded from the WebDAV library (id = remote:<rel>).
  * @returns {{meta, duplicate: boolean}}
  */
-export async function importBlob(file, { name = file.name, remote = null, onStatus = () => {} } = {}) {
+export async function importBlob(file, { name = file.name, remote = null, origin = null, onStatus = () => {} } = {}) {
   const format = formatOf(name);
   if (!format) throw new Error(`暂不支持 ${extOf(name) || '该'} 格式（支持 EPUB、MOBI/AZW3、TXT、Markdown、HTML、PDF）`);
   if (file.size > MAX_IMPORT_BYTES) throw new Error(`文件过大（${Math.round(file.size / 1048576)} MB，上限 ${MAX_IMPORT_BYTES / 1048576} MB）`);
   if (file.size === 0) throw new Error('文件是空的');
   const id = remote ? remoteBookId(remote.rel) : localBookId(name, file.size);
   const existing = await db.get('books', id);
-  if (existing && (await db.get('files', id))) return { meta: existing, duplicate: true };
+  if (existing && (await db.get('files', id))) {
+    if (origin && !existing.origin) { existing.origin = origin; await db.put('books', existing); }   // same file already on the shelf: just tag where it came from
+    return { meta: existing, duplicate: true };
+  }
 
   const meta = {
     id, name, format, size: file.size, title: stem(name), author: '', addedAt: Date.now(), readAt: 0, percent: 0,
     lens: [], headings: null, pageCount: 0, source: remote ? 'remote' : 'local', rel: remote ? remote.rel : null,
     remoteSize: remote ? remote.size : 0, remoteMtime: remote ? remote.mtime : 0,
   };
+  if (origin) meta.origin = origin;   // e.g. "gutenberg:84" (online library); the shelf shows 已添加 for it
   let coverBlob = null;
   onStatus(`解析 ${name}…`);
   if (format === 'epub' || format === 'mobi') {
