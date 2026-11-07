@@ -559,6 +559,23 @@ def _novel_with_plates(tmp_path, frac, n=40, **kw):
     return make_epub(tmp_path / "x.epub", pages, images, **kw)
 
 
+def _novel_with_plates_at(tmp_path, n, plate_ids, **kw):
+    """n 页的书，plate_ids 里的页是整页插图，其余是 600 字正文。"""
+    pages, images = {}, {}
+    for i in range(n):
+        if i in plate_ids:
+            pages[f"c{i}.xhtml"] = img_body(f"pl{i}.jpg")
+            images[f"pl{i}.jpg"] = EFAKE
+        else:
+            pages[f"c{i}.xhtml"] = "<p>" + "字" * 600 + "</p>"
+    return make_epub(tmp_path / "x.epub", pages, images, **kw)
+
+
+def _sampled_ids(n):
+    """n 页的书里（去掉首尾后）会被抽查的页号。检测只看这 12 页，所以临界用例按它构造，不靠碰巧。"""
+    return cm._sample(list(range(1, n - 1)), cm.EPUB_SAMPLE_PAGES)
+
+
 TEXTY_THIRD = cm._sample(list(range(1, 29)), cm.EPUB_SAMPLE_PAGES)[::3]       # 30 页书会被抽查的 12 页里的 4 页：图片页占 8/12，介于 0.5 与 0.8 之间
 
 POSITIVES = {
@@ -566,7 +583,8 @@ POSITIVES = {
     "封面包装页 + 真实形状": lambda d: comic_epub(d / "x.epub", n=150),
     "svg 包装的页": lambda d: make_epub(d / "x.epub", {f"p{i}.xhtml": svg_body(f"{i}.png") for i in range(30)},
                                       {f"{i}.png": EFAKE for i in range(30)}),
-    "约 15% 的页带 80 字说明": lambda d: _with_text(d, 100, [3, 17, 31, 45, 59, 71, 83, 95, 8, 22, 36, 50, 64, 78, 90], "字" * 80),
+    "约 15% 的页带 80 字说明（抽样里恰有 2 页：10/12 仍过线）": lambda d: _with_text(
+        d, 100, _sampled_ids(100)[3:4] + _sampled_ids(100)[7:8] + [i for i in range(1, 99) if i not in _sampled_ids(100)][:13], "字" * 80),
     "一页 400 字译者注": lambda d: _with_text(d, 100, [50], "注" * 400),
     "book-type=manga 且抽样页里三分之一带 80 字": lambda d: _with_text(d, 30, TEXTY_THIRD, "字" * 80, book_type="manga"),
     "绘本：每页不超过 30 字": lambda d: _with_text(d, 24, range(24), "字" * 30),
@@ -580,7 +598,8 @@ NEGATIVES = {
     "纯文字小说": lambda d: text_epub(d / "x.epub", n=30),
     "三成整页插图的小说": lambda d: _novel_with_plates(d, 0.3),
     "五成整页插图的小说": lambda d: _novel_with_plates(d, 0.5),
-    "七成整页图的写真类非虚构": lambda d: _novel_with_plates(d, 0.7),
+    "七成整页图的写真类非虚构（抽样里 9/12 = 0.75，不到 0.80）": lambda d: _novel_with_plates_at(
+        d, 40, set(_sampled_ids(40)[:9]) | set([i for i in range(40) if i not in _sampled_ids(40)][:19])),
     "固定版式：背景图 + 每页 300 字": lambda d: _with_text(d, 30, range(30), "字" * 300),
     "扫描书 + 隐藏的 OCR 文字层": lambda d: make_epub(d / "x.epub", {f"p{i}.xhtml": img_body(f"{i}.jpg") + '<div style="display:none">' + "字" * 300 + "</div>" for i in range(30)},
                                               {f"{i}.jpg": EFAKE for i in range(30)}),
@@ -656,8 +675,8 @@ def test_is_image_epub_memoized_by_path_size_mtime(tmp_path, monkeypatch):
 def test_is_image_epub_samples_at_most_twelve_pages_evenly(tmp_path):
     pages, images = _pictures(200)
     p = make_epub(tmp_path / "s.epub", pages, images)
-    assert len(cm._sample(list(range(100)), 12)) == 12
-    assert cm._sample(list(range(100)), 12)[0] == 0 and cm._sample(list(range(100)), 12)[-1] == 99
+    # 与 PWA web/test/comic.test.js 里钉死的同一组位置：两边必须对同一本书抽同样的页
+    assert cm._sample(list(range(100)), 12) == [0, 8, 16, 25, 33, 41, 50, 58, 66, 75, 83, 91]
     assert cm._sample([1, 2, 3], 12) == [1, 2, 3]
     assert cm.is_image_epub(p) is True
 

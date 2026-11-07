@@ -265,11 +265,12 @@ def epub_page_order(path: str) -> Tuple[List[str], Optional[bool]]:
 
 
 def _sample(items: list, k: int) -> list:
-    """从 items 里均匀取至多 k 个（含首尾）。"""
+    """从 items 里均匀取至多 k 个：第 i 个是 floor(i*n/k)。与 PWA 的 web/js/core/comic.js sampleIndexes 保持一致，
+    两边对同一本书才会给出同样的判定（临界的书不会一边当漫画一边当文字书）。"""
     n = len(items)
     if n <= k:
         return list(items)
-    return [items[round(i * (n - 1) / (k - 1))] for i in range(k)]
+    return [items[i * n // k] for i in range(k)]
 
 
 def _detect_image_epub(zf: zipfile.ZipFile) -> bool:
