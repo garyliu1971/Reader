@@ -17,7 +17,7 @@ node --test web/test                              # 单元 + 同步互操作测�
 * Service Worker / 安装需要 `https://` 或 `localhost`/`127.0.0.1`。
 * 生成测试书：`python web/tools/make_test_books.py OUTDIR`（EPUB/TXT/GBK TXT/Markdown/HTML/PDF/大文件）。
 * 本地 WebDAV（带 CORS）：`python web/tools/devdav.py --auth user:pass --seed 某目录`。它复用 `tests/fakedav.py`（Qt 测试用的假服务器，只读引用），只在 `web/tools/` 里加了一层 CORS；监听 127.0.0.1，输出 `READY http://127.0.0.1:端口/dav`。
-* 真实浏览器烟测（可选，不属于 `node --test`）：在 `web/tools/browser-smoke/` 里 `npm i playwright-core axe-core --no-save`，先生成测试书（见上）并启动静态服务器，再 `node reader.mjs`（阅读/重排/目录/搜索/书签/主题/GBK TXT）、`formats-touch-large.mjs`（13 MB TXT、PDF、触摸点击区/滑动、选择复制）、`sync-e2e.mjs`（真实 CORS 预检、下载、进度推送与不回退、对等设备文件、无 DELETE、离线 PWA）、`big-epub-upload.mjs`（大 EPUB、拖拽导入、上传不覆盖）、`security.mjs`（净化）、`a11y.mjs`（axe-core）、`pinch.mjs`。环境变量：`SMOKE_TMP`（默认系统临时目录/pyreader-web-smoke）、`CHROME_PATH`、`APP_URL`。
+* 真实浏览器烟测（可选，不属于 `node --test`）：在 `web/tools/browser-smoke/` 里 `npm i playwright-core axe-core --no-save`，先生成测试书（见上）并启动静态服务器，再 `node reader.mjs`（阅读/重排/目录/搜索/书签/主题/GBK TXT）、`formats-touch-large.mjs`（13 MB TXT、PDF、触摸点击区/滑动、选择复制）、`sync-e2e.mjs`（真实 CORS 预检、下载、进度推送与不回退、对等设备文件、无 DELETE、离线 PWA）、`big-epub-upload.mjs`（大 EPUB、拖拽导入、上传不覆盖）、`security.mjs`（净化）、`a11y.mjs`（axe-core）、`pinch.mjs`、`swupdate.mjs`（自带小服务器同时提供旧/新几个版本，验证“新版本可用”提示、点击刷新后换版、旧版页面升级路径；需要 git 和 tar）。环境变量：`SMOKE_TMP`（默认系统临时目录/pyreader-web-smoke）、`CHROME_PATH`、`APP_URL`。
 * 重新生成与 Python 实现对拍的黄金数据：`python web/tools/gen_golden.py`；重新生成图标：`python web/tools/gen_icons.py`。
 
 ## 部署（静态托管）
@@ -110,6 +110,13 @@ curl -si -X OPTIONS https://dav.example.com/ -H 'Origin: https://reader.example.
 * 操作：左右点击区翻页、点中间呼出设置/进度栏、滑动翻页、方向键/PageUp/PageDown/空格、`Ctrl/⌘ +/-/0` 与双指捏合调字号、`T` 目录、`B` 书签、`/` 搜索、`Esc` 返回。**文字可选择复制**（选区存在时点击不翻页）。
 * 大文件：TXT 在 Web Worker 里解码+分章；EPUB 逐章扫描并让出主线程；一章最多 4 万字符一屏布局（TXT）；没有对整本书做字符串拼接循环。
 
+## 更新（Service Worker）
+
+* 新版本部署后，浏览器在打开页面/回到标签页（最多每 5 分钟一次）时检查 `sw.js`。新 worker 装好后**不会自动接管**：页面底部出现“有新版本可用  [刷新] [稍后]”，只有点“刷新”才会让新 worker 接管并重新加载一次；阅读中、朗读中不会被自动刷新（朗读中或正在导入时点“刷新”会先确认；刷新前会先保存阅读进度）。正在等待期间，当前页面继续使用旧版本缓存（旧 worker 在新 worker 安装/等待时不再把网络上的新文件写进旧缓存），懒加载的模块不会和运行中的 JS 版本错位。
+* 部署时照旧要改 `sw.js` 里的 `CACHE`（否则浏览器认为 `sw.js` 没变，不会触发更新）。
+* **从没有提示的旧版（v7 及更早）升级**：旧页面不会回答新 worker 的探测（等待最多 2 秒；只统计本应用目录下的窗口，同源的其它页面如 WebDAV 网页不算），新 worker 看到有“静默”窗口就立刻接管（和旧版行为一致）；用户照旧刷新一到两次即可，之后的版本才有提示。新页面 + 旧 worker 不会出问题（页面只是在 worker 变化时才弹提示）。
+* 只有同源且在 `sw.js` 所在目录下的 GET 请求会被处理；同源的 WebDAV 路径、跨域请求完全不经过 worker。
+
 ## 目录
 
 ```
@@ -117,11 +124,11 @@ web/
   index.html  manifest.webmanifest  sw.js  css/app.css  icons/
   js/app.js            启动、路由、同步调度、PWA 注册
   js/library.js        导入/元数据/封面/进度/书签（IndexedDB）
-  js/core/*            纯逻辑（node 可测）：names bookid sha1 textenc chapters anchor progress shelfmerge
+  js/core/*            纯逻辑（node 可测）：names bookid sha1 textenc chapters anchor progress shelfmerge origin swupdate
   js/parse/*           epub textbooks(txt/md/html) txt.worker sanitize pdf
   js/reader/*          paginator（分页引擎）reader（界面、手势、进度）
   js/sync/*            propfind（防御式解析）webdav sync（引擎）manager（调度/配置）
-  js/ui/*              dom shelf settings icons
+  js/ui/*              dom shelf settings icons update（新版本提示）
   js/store/*           db（IndexedDB 封装，失败退化为内存）settings
   vendor/              jszip marked pdf.js（固定版本 + 许可）
   test/*.test.js       node:test
