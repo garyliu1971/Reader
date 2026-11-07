@@ -11,6 +11,7 @@ import { openStored, touchRead, getProgress, saveProgress, getBookmarks, addBook
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
 import { aliasIds, localBookId } from '../core/bookid.js';
+import { normalizeSelection } from '../parse/pdftext.js';
 import { DWELL_MS } from '../core/recent.js';
 import { navDir } from '../core/search.js';
 import { makeTimer, isDue, timerLabel, activeChoice, SLEEP_MINUTES } from '../core/sleeptimer.js';
@@ -350,7 +351,7 @@ export class ReaderView {
     if (this.book) { try { this.book.close(); } catch { /* ignore */ } }
     this.book = null;
     this.content.replaceChildren();
-    if (this.pdfCanvas) { this.pdfCanvas.remove(); this.pdfCanvas = null; }
+    if (this.pdfWrap) { this.pdfWrap.remove(); this.pdfWrap = null; this.pdfCanvas = null; this.pdfText = null; }
   }
 
   close() {
@@ -386,14 +387,14 @@ export class ReaderView {
 
   // ------------------------------------------------------------------ translate selection (Translator API)
   onSelection() {
-    if (!this.tr || !this.active || this.pdf || !this.book) { this.hideTr(); return; }
+    if (!this.tr || !this.active || !this.book) { this.hideTr(); return; }
     if (this._ptrDown) return;
     const sel = globalThis.getSelection && getSelection();
     if (!sel || !sel.rangeCount) { this.hideTr(); return; }
     const range = sel.getRangeAt(0);
     if (this.trPop.contains(range.commonAncestorContainer)) return;   // selecting inside the translation itself
-    const text = sel.toString();
-    if (sel.isCollapsed || !text.trim() || !this.content.contains(range.commonAncestorContainer)) { this.hideTr(); return; }
+    const text = this.pdf ? normalizeSelection(sel.toString()) : sel.toString();
+    if (sel.isCollapsed || !text.trim() || !(this.pdf ? this.pdfText : this.content).contains(range.commonAncestorContainer)) { this.hideTr(); return; }
     const rects = range.getClientRects();
     const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
     const first = rects.length ? rects[0] : last;
@@ -951,7 +952,9 @@ export class ReaderView {
   async openPdfAt(page) {
     this.pdfPage = Math.max(0, Math.min(this.book.pageCount - 1, page || 0));
     this.pdfCanvas = h('canvas', { 'aria-label': 'PDF 页面', role: 'img' });
-    this.frame.append(this.pdfCanvas);
+    this.pdfText = h('div', { class: 'pdf-text' });   // invisible selectable text over the canvas
+    this.pdfWrap = h('div', { class: 'pdf-page' }, this.pdfCanvas, this.pdfText);
+    this.frame.append(this.pdfWrap);
     this.frame.classList.remove('scroll');
     await this.renderPdf();
     this.updateUi();
@@ -963,7 +966,7 @@ export class ReaderView {
     if (!this.pdf || !this.pdfCanvas) return;
     this.pdfCanvas.classList.toggle('invert', isDarkNow());
     const w = this.frame.clientWidth - 8, hgt = this.frame.clientHeight - 8;
-    try { await this.book.render(this.pdfPage, this.pdfCanvas, Math.max(50, w), Math.max(50, hgt)); } catch (e) { toast('渲染失败：' + e.message); }
+    try { await this.book.render(this.pdfPage, this.pdfCanvas, Math.max(50, w), Math.max(50, hgt), this.pdfText); } catch (e) { toast('渲染失败：' + e.message); }
   }
   async setPdfPage(p, user) {
     this.pdfPage = p;

@@ -1,4 +1,5 @@
-// PDF support (v1: render-only, one page per screen, no text layer). pdf.js is loaded lazily on first use.
+// PDF support (one page per screen; canvas render + an invisible, selectable pdf.js TextLayer over it). pdf.js is loaded lazily on first use.
+import { fitScale, layerBox, itemsToText } from './pdftext.js';
 let pdfjsPromise = null;
 export function getPdfjs() {
   if (!pdfjsPromise) {
@@ -46,22 +47,45 @@ export async function openPdf(blob) {
   const n = doc.numPages;
   const sections = Array.from({ length: n }, (_, i) => ({ title: `第 ${i + 1} 页` }));
   let task = null;
+  let tl = null;   // current TextLayer
+  let seq = 0;     // newest render wins
   return {
     format: 'pdf', title, author, sections, toc: outline.length ? outline : [], lens: Array(n).fill(1), pageCount: n,
-    /** render page i into `canvas`, fitting (w,h) CSS pixels; later calls cancel earlier ones */
-    async render(i, canvas, w, h) {
+    /** render page i into `canvas`, fitting (w,h) CSS pixels; later calls cancel earlier ones.
+     *  With `textDiv` an invisible selectable text layer is built over the canvas (same CSS size). */
+    async render(i, canvas, w, h, textDiv) {
+      const my = ++seq;
       if (task) { try { task.cancel(); } catch { /* ignore */ } }
+      if (tl) { try { tl.cancel(); } catch { /* ignore */ } tl = null; }
       const page = await doc.getPage(i + 1);
+      if (my !== seq) return;
       const v1 = page.getViewport({ scale: 1 });
-      const scale = Math.min(w / v1.width, h / v1.height);
+      const scale = fitScale(v1.width, v1.height, w, h);
       const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
       const vp = page.getViewport({ scale: scale * dpr });
       canvas.width = Math.floor(vp.width);
       canvas.height = Math.floor(vp.height);
       canvas.style.width = Math.floor(vp.width / dpr) + 'px';
       canvas.style.height = Math.floor(vp.height / dpr) + 'px';
+      if (textDiv) textDiv.replaceChildren();
       task = page.render({ canvasContext: canvas.getContext('2d'), viewport: vp });
-      try { await task.promise; } catch (e) { if (!(e && e.name === 'RenderingCancelledException')) throw e; }
+      try { await task.promise; } catch (e) { if (!(e && e.name === 'RenderingCancelledException')) throw e; return; }
+      if (my !== seq || !textDiv) return;
+      try {
+        const box = layerBox(v1.width, v1.height, scale);
+        textDiv.style.width = Math.floor(vp.width / dpr) + 'px';
+        textDiv.style.height = Math.floor(vp.height / dpr) + 'px';
+        textDiv.style.setProperty('--scale-factor', String(box.scaleFactor));
+        const layer = new pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: textDiv, viewport: page.getViewport({ scale }) });
+        tl = layer;
+        await layer.render();
+      } catch (e) { if (!(e && e.name === 'AbortException')) console.warn('pdf text layer failed', e); }   // the page stays readable without it
+    },
+    /** plain text of page i (for future search / read-aloud) */
+    async pageText(i) {
+      const page = await doc.getPage(i + 1);
+      const tc = await page.getTextContent();
+      return itemsToText(tc.items);
     },
     async cover(maxW = 240) {
       const page = await doc.getPage(1);
