@@ -86,9 +86,9 @@ test('PrefetchQueue: starts the window once, aborts what fell out, retries failu
   assert.equal(await q.get('z', 'z'), 'z');
 });
 
-test('sw.js: bumped to v11, never handles /tts/ requests, only its own dir', () => {
+test('sw.js: versioned cache, never handles /tts/ requests, only its own dir', () => {
   const sw = readFileSync(join(here, '..', 'sw.js'), 'utf8');
-  assert.match(sw, /const CACHE = 'pyreader-web-v11'/);
+  assert.match(sw, /const CACHE = 'pyreader-web-v\d+'/);   // the exact version changes every release; swupdate.test.js keeps the constants in step
   assert.match(sw, /pathname\.startsWith\(SCOPE_PATH\)\) return;/);
   assert.match(sw, /pathname\.includes\('\/tts\/'\)\) return;/);
   assert.match(sw, /req\.method !== 'GET'\) return;/);
