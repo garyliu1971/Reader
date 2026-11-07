@@ -12,6 +12,8 @@ import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from 
 import { stampNow } from '../core/progress.js';
 import { aliasIds, localBookId } from '../core/bookid.js';
 import { DWELL_MS } from '../core/recent.js';
+import { navDir } from '../core/search.js';
+import { makeTimer, isDue, timerLabel, activeChoice, SLEEP_MINUTES } from '../core/sleeptimer.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
 const TAP_ZONE = 0.3;
@@ -79,12 +81,16 @@ export class ReaderView {
     this.ttsState = h('span', { class: 'state', 'aria-live': 'polite' }, '朗读中');
     this.ttsPlay = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '暂停朗读', onclick: () => this.ttsPauseResume() }, icon('pause'));
     this.ttsRateEl = h('span', { class: 'rate' }, '1.0x');
+    this.sleep = null;       // sleep timer (core/sleeptimer.js); only lives while reading aloud
+    this.sleepTick = 0;
+    this.ttsSleep = h('button', { class: 'sleep-btn', type: 'button', 'aria-label': '睡眠定时', onclick: () => this.openSleepMenu() }, '定时');
     this.ttsBar = h('div', { class: 'tts-bar', role: 'toolbar', 'aria-label': '朗读控制' },
       this.ttsState,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '减慢语速', onclick: () => this.ttsStep(-0.1) }, '−'),
       this.ttsRateEl,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '加快语速', onclick: () => this.ttsStep(0.1) }, '+'),
       this.ttsPlay,
+      this.ttsSleep,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '停止朗读', onclick: () => this.tts && this.tts.stop() }, icon('stop')));
     this.loading = h('div', { class: 'loading', role: 'status' }, '正在打开…');
     this.contentS = -1;   // section whose text is laid out in the paginator (this.s is already the new one while it loads)
@@ -129,7 +135,7 @@ export class ReaderView {
           reveal: (a, b) => this.ttsReveal(a, b),
           nextSection: () => this.ttsNextSection(),
           changed: (st) => this.ttsChanged(st),
-          finished: () => toast('朗读完毕', { ms: 1800 }),
+          finished: () => { if (!this.sleepFired) toast('朗读完毕', { ms: 1800 }); this.sleepFired = false; },
           failed: (m) => { if (m) toast(m, { ms: 6000 }); },
           settings: () => this.settings || {},
         },
@@ -235,6 +241,8 @@ export class ReaderView {
       }
       const overlay = document.querySelector('.overlay-root:not(.side-sheet)');
       if (mod && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F') && !overlay && this.book && !this.pdf) { e.preventDefault(); this.openSearch(); return; }   // a PDF has no text: leave the browser's own find alone
+      const nav = !overlay && this.find.isOpen ? navDir(e) : 0;   // F3 / Ctrl+G: next hit, Shift = previous
+      if (nav) { e.preventDefault(); this.find.step(nav); return; }
       if (overlay || mod || e.altKey) return;
       switch (e.key) {
         case 'ArrowRight': case 'ArrowDown': case 'PageDown': this.next(); break;
@@ -243,7 +251,6 @@ export class ReaderView {
         case 'Home': this.seekPercent(0); break;
         case 'End': this.seekPercent(100); break;
         case 'Escape': if (!this.trPop.hidden || !this.trBtn.hidden) this.hideTr(); else if (this.find.isOpen) this.find.close(); else if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
-        case 'F3': if (this.find.isOpen) this.find.step(e.shiftKey ? -1 : 1); else return; break;
         case 't': case 'T': this.openToc('toc'); break;
         case 'b': case 'B': this.toggleBookmark(); break;
         case '/': e.preventDefault(); this.openSearch(); break;
@@ -490,6 +497,44 @@ export class ReaderView {
     this.ttsPlay.setAttribute('aria-label', st === 'paused' ? '继续朗读' : '暂停朗读');
     if (this.settings) this.ttsRateEl.textContent = this.settings.ttsRate.toFixed(1) + 'x';
     if (st === 'idle' && globalThis.CSS && CSS.highlights) CSS.highlights.delete('tts');
+    if (st === 'idle') this.setSleep(null);
+  }
+
+  // ------------------------------------------------------------------ sleep timer
+  /** arm (or with null, cancel) the timer; the countdown is polled against the clock so a throttled background tab still stops on time */
+  setSleep(t) {
+    clearInterval(this.sleepTick);
+    this.sleepTick = 0;
+    this.sleep = t;
+    this.ttsSleep.classList.toggle('on', !!t);
+    this.ttsSleep.textContent = timerLabel(t, Date.now());
+    this.ttsSleep.setAttribute('aria-label', t ? `睡眠定时：${this.ttsSleep.textContent}，点按更改或取消` : '睡眠定时');
+    if (t && t.kind === 'time') this.sleepTick = setInterval(() => this.sleepCheck(), 500);
+  }
+
+  sleepCheck() {
+    if (!this.sleep) return;
+    if (isDue(this.sleep, Date.now())) this.sleepStop();
+    else this.ttsSleep.textContent = timerLabel(this.sleep, Date.now());
+  }
+
+  sleepStop() {
+    if (this.tts) this.tts.stop();   // goes idle -> clears the timer
+    toast('睡眠定时已到，已停止朗读', { ms: 3000 });
+  }
+
+  openSleepMenu() {
+    if (!this.tts || this.tts.state === 'idle') return;
+    const on = activeChoice(this.sleep);
+    const pick = (choice) => { p.close(); this.setSleep(makeTimer(choice, Date.now())); };
+    const item = (label, choice) => h('li', { 'aria-current': on === choice ? 'true' : null }, h('button', { type: 'button', onclick: () => pick(choice) }, label));
+    const p = openPanel({
+      title: '睡眠定时', side: 'dialog', label: '睡眠定时',
+      content: h('ul', { class: 'list' },
+        ...SLEEP_MINUTES.map((m) => item(`${m} 分钟后停止`, m)),
+        item('读完本章后停止', 'chapter'),
+        ...(this.sleep ? [h('li', null, h('button', { type: 'button', class: 'danger', onclick: () => { p.close(); this.setSleep(null); } }, '取消定时'))] : [])),
+    });
   }
 
   /** called before each sentence is spoken: bring it into view (turning the page if needed) and highlight it */
@@ -504,6 +549,12 @@ export class ReaderView {
   }
 
   async ttsNextSection() {
+    if (this.sleep && this.sleep.kind === 'chapter') {   // chapter read to its end: stop here instead of rolling on (the tts loop then goes idle)
+      this.sleepFired = true;
+      this.setSleep(null);
+      toast('睡眠定时已到，已停止朗读', { ms: 3000 });
+      return false;
+    }
     if (!this.book || this.s >= this.book.sections.length - 1) return false;
     this._ttsMoving++;
     try { await this.showSection(this.s + 1, { start: true }); } finally { this._ttsMoving--; }
