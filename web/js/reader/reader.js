@@ -1,14 +1,16 @@
-// Reader view: toolbar, drawers (TOC / bookmarks / search / settings), gestures, progress saving.
+// Reader view: toolbar, drawers (TOC / bookmarks / settings), search bar (find.js), gestures, progress saving.
 // The text layout itself lives in paginator.js; positions are {s, o, f, c} anchors (see core/anchor.js).
-import { h, openPanel, toast, debounce, sleep } from '../ui/dom.js';
+import { h, openPanel, toast, debounce } from '../ui/dom.js';
 import { icon } from '../ui/icons.js';
 import { Paginator } from './paginator.js';
 import { TtsReader, pickVoice } from './tts.js';
 import { Translate } from './translate.js';
+import { FindBar } from './find.js';
 import { kvGet, kvSet } from '../store/db.js';
-import { openStored, touchOpened, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
+import { openStored, touchRead, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
+import { DWELL_MS } from '../core/recent.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
 const TAP_ZONE = 0.3;
@@ -52,7 +54,7 @@ export class ReaderView {
     this.titleEl = h('div', { class: 'title' });
     this.btnToc = h('button', { class: 'icon-btn labelled', type: 'button', 'aria-label': '目录和书签', onclick: () => this.openToc('toc') }, icon('menu'), h('span', { class: 'lbl', 'aria-hidden': 'true' }, '目录'));
     this.btnTts = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '朗读', 'aria-pressed': 'false', onclick: () => this.toggleTts() }, icon('speaker'));
-    this.btnSearch = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '搜索全文', onclick: () => this.openSearch() }, icon('search'));
+    this.btnSearch = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '搜索全文', title: '搜索全文（Ctrl+F 或 /）', onclick: () => this.openSearch() }, icon('search'));
     this.btnMark = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '添加书签', 'aria-pressed': 'false', onclick: () => this.toggleBookmark() }, icon('bookmark'));
     this.btnSet = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '阅读设置', onclick: () => this.openSettings() }, icon('font'));
     this.topbar = h('div', { class: 'topbar', role: 'toolbar', 'aria-label': '阅读工具栏' },
@@ -84,7 +86,23 @@ export class ReaderView {
       this.ttsPlay,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '停止朗读', onclick: () => this.tts && this.tts.stop() }, icon('stop')));
     this.loading = h('div', { class: 'loading', role: 'status' }, '正在打开…');
-    r.append(this.stage, this.status, this.topbar, this.bottom, this.ttsBar, this.loading);
+    this.contentS = -1;   // section whose text is laid out in the paginator (this.s is already the new one while it loads)
+    this.find = new FindBar({
+      count: () => (this.book ? this.book.sections.length : 0),
+      text: (i) => this.sectionText(i),
+      title: (i) => (this.book && this.book.sections[i] && this.book.sections[i].title) || '',
+      start: () => ({ s: this.s, o: this.s === this.contentS ? this.pg.pageRange()[0] : 0 }),   // this.s is ahead of the laid-out text while a section loads
+      here: () => this.pg.currentOffset(),
+      visible: (s, o) => { if (s !== this.contentS) return false; const [a, b] = this.pg.pageRange(); return o >= a && o < Math.max(b, a + 1); },
+      section: () => this.contentS,
+      goto: (s, o) => this.gotoTarget(s, { offset: o }),
+      range: (a, b) => this.pg.rangeFor(a, b),
+      onToggle: (on) => {
+        this.root.classList.toggle('finding', on);
+        if (on) { this.setBars(false); this.hideTr(); } else if (this.pg.mode === 'paged') this.frame.focus({ preventScroll: true });
+      },
+    });
+    r.append(this.stage, this.status, this.topbar, this.bottom, this.ttsBar, this.find.el, this.loading);
     // select text -> small 翻译 button -> popover with the on-device translation (Chrome/Edge Translator API)
     this.tr = Translate.supported() ? new Translate({ T: globalThis.Translator, LD: globalThis.LanguageDetector }) : null;
     this.trSeq = 0;
@@ -206,7 +224,7 @@ export class ReaderView {
       if (!this.active) return;
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
-      if (t && t.closest && t.closest('.tr-pop, .tr-btn') && (e.key === ' ' || e.key === 'Enter')) return;   // activate the focused button, do not turn the page
+      if (t && t.closest && t.closest('.tr-pop, .tr-btn, .findbar') && (e.key === ' ' || e.key === 'Enter')) return;   // activate the focused button, do not turn the page
       const mod = e.ctrlKey || e.metaKey;
       if (mod && ['+', '=', '-', '_', '0'].includes(e.key)) {
         e.preventDefault();
@@ -214,14 +232,17 @@ export class ReaderView {
         else this.setSetting('fontSize', this.settings.fontSize + (e.key === '-' || e.key === '_' ? -1 : 1));
         return;
       }
-      if (document.querySelector('.overlay-root:not(.side-sheet)') || mod || e.altKey) return;
+      const overlay = document.querySelector('.overlay-root:not(.side-sheet)');
+      if (mod && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F') && !overlay && this.book && !this.pdf) { e.preventDefault(); this.openSearch(); return; }   // a PDF has no text: leave the browser's own find alone
+      if (overlay || mod || e.altKey) return;
       switch (e.key) {
         case 'ArrowRight': case 'ArrowDown': case 'PageDown': this.next(); break;
         case 'ArrowLeft': case 'ArrowUp': case 'PageUp': this.prev(); break;
         case ' ': e.shiftKey ? this.prev() : this.next(); break;
         case 'Home': this.seekPercent(0); break;
         case 'End': this.seekPercent(100); break;
-        case 'Escape': if (!this.trPop.hidden || !this.trBtn.hidden) this.hideTr(); else if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
+        case 'Escape': if (!this.trPop.hidden || !this.trBtn.hidden) this.hideTr(); else if (this.find.isOpen) this.find.close(); else if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
+        case 'F3': if (this.find.isOpen) this.find.step(e.shiftKey ? -1 : 1); else return; break;
         case 't': case 'T': this.openToc('toc'); break;
         case 'b': case 'B': this.toggleBookmark(); break;
         case '/': e.preventDefault(); this.openSearch(); break;
@@ -270,8 +291,9 @@ export class ReaderView {
       this.scrollNav.hidden = this.pdf;
       if (!this.pdf && this.pg.mode !== this.settings.mode) this.pg.setMode(this.settings.mode);
       this.content.hidden = this.pdf;
-      this.btnSearch.disabled = this.pdf;
-      this.btnSearch.title = this.pdf ? 'PDF 暂不支持全文搜索' : '';
+      this.btnSearch.setAttribute('aria-disabled', String(this.pdf));   // not `disabled`: a tap on a phone must still explain why
+      this.btnSearch.classList.toggle('is-disabled', this.pdf);
+      this.btnSearch.title = this.pdf ? 'PDF 暂不支持全文搜索' : '搜索全文（Ctrl+F 或 /）';
       this.btnTts.disabled = this.pdf;
       this.btnTts.title = this.pdf ? 'PDF 暂不支持朗读' : '朗读（R）';
       this.searchCache.clear();
@@ -287,10 +309,11 @@ export class ReaderView {
         await this.showSection(s, a && a.s === s ? { anchor: a } : { start: true });
       }
       this.quiet = false;
+      this._restoredTop = this.pg.mode === 'scroll' ? this.frame.scrollTop : null;   // the scroll event the restore above queued is not reading
       if (seq !== this.seq) return;
       this.loading.hidden = true;
       this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
-      touchOpened(meta, Math.round(stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0) * 1000)).catch(() => {});
+      this.armDwell(meta.id);
       this.checkRemote(saved);
       this.refreshMarkButton();
       this.maybeShowHint();
@@ -301,8 +324,20 @@ export class ReaderView {
     }
   }
 
+  /** Opening alone is not reading: the book only becomes "continue reading" once progress moves or it stays open (and visible) for DWELL_MS */
+  armDwell(id) {
+    clearTimeout(this._dwellT);
+    this._dwellT = setTimeout(() => {
+      if (!this.active || !this.meta || this.meta.id !== id || document.visibilityState === 'hidden') return;
+      touchRead(id, Math.round(stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0) * 1000)).catch(() => {});
+    }, DWELL_MS);
+  }
+
   closeBook() {
+    clearTimeout(this._dwellT);
     this.hideTr();
+    this.find.reset();
+    this.contentS = -1;
     if (this.tts) this.tts.stop();
     if (this.book) { try { this.book.close(); } catch { /* ignore */ } }
     this.book = null;
@@ -556,7 +591,7 @@ export class ReaderView {
     ];
     const body = [h('label', { class: 'field' }, h('span', null, '主题'), theme.wrap),
       ...(this.pdf ? [h('p', { class: 'hint', text: 'PDF 为固定版式，暂不支持字体/行距/边距设置（仅主题：夜间模式会反色显示）。' })] : typo),
-      h('p', { class: 'hint', text: '快捷键：Ctrl/⌘ + 加号/减号/0 调字号；左右方向键、PageUp/PageDown、空格翻页；T 目录；B 书签；/ 搜索；双指捏合也可调字号。' })];
+      h('p', { class: 'hint', text: '快捷键：Ctrl/⌘ + 加号/减号/0 调字号；左右方向键、PageUp/PageDown、空格翻页；T 目录；B 书签；Ctrl+F 或 / 搜索（Enter 下一个，Shift+Enter 上一个）；双指捏合也可调字号。' })];
     this.settingsSync = () => { theme.upd(); fam.upd(); fs.upd(); lh.upd(); mg.upd(); ps.upd(); mode.upd(); if (!this.pdf) { lw.upd(); rate.upd(); trSeg.upd(); } };
     const p = openPanel({ title: '阅读设置', side: 'sheet', content: body, onClose: () => { this.settingsSync = null; if (offVoices) offVoices(); } });
     return p;
@@ -568,9 +603,10 @@ export class ReaderView {
     const { frag, cleanup } = await this.book.loadSection(i);
     if (seq !== this.seq2) { cleanup(); return; }
     this.s = i;
-    this.clearHighlight();
+    this.find.clearPaint();
     await this.pg.setContent(frag, cleanup);
     if (seq !== this.seq2) return;
+    this.contentS = i;
     if (where.anchor) this.pg.gotoOffset(resolveOffset(where.anchor, this.pg.fullText()));
     else if (where.offset !== undefined) this.pg.gotoOffset(where.offset);
     else if (where.fraction !== undefined) this.pg.gotoOffset(this.pg.skipBlank(Math.round(where.fraction * this.pg.total)));
@@ -578,6 +614,7 @@ export class ReaderView {
     else if (where.end) this.pg.gotoEnd();
     else this.pg.gotoOffset(0);
     this.updateUi();
+    this.find.onPage();
   }
 
   async next() {
@@ -633,7 +670,7 @@ export class ReaderView {
 
   async gotoTarget(s, where) {
     if (this.pdf) { await this.setPdfPage(s, true); return; }
-    if (s === this.s) {
+    if (s === this.s && s === this.contentS) {   // not while that section is still loading: the paginator holds the old text
       if (where.anchor) this.pg.gotoOffset(resolveOffset(where.anchor, this.pg.fullText()));
       else if (where.id) { if (!this.pg.gotoId(where.id)) this.pg.gotoOffset(0); }
       else if (where.offset !== undefined) this.pg.gotoOffset(where.offset);
@@ -657,7 +694,7 @@ export class ReaderView {
   onPaginator(reason) {
     if (reason === 'layout') this.hideTr();   // resize / font change: the fixed-position popover would point at the wrong place
     if (reason === 'page') {
-      this.clearHighlight();
+      this.find.onPage();
       this.hideTr();
       this.markDirty();
       // the reader turned the page by hand while reading aloud: continue from the top of the new page
@@ -668,7 +705,13 @@ export class ReaderView {
 
   onScroll() {
     if (this._scrollT) clearTimeout(this._scrollT);
-    this._scrollT = setTimeout(() => this.pg.syncAnchorFromScroll(), 120);
+    this._scrollT = setTimeout(() => {
+      if (this._restoredTop != null) {
+        if (Math.abs(this.frame.scrollTop - this._restoredTop) < 1) return;   // still where open() put it
+        this._restoredTop = null;
+      }
+      this.pg.syncAnchorFromScroll();
+    }, 120);
   }
 
   markDirty() { if (this.quiet) return; this.dirty = true; this.saveSoon(); }
@@ -834,58 +877,23 @@ export class ReaderView {
     this.refreshMarkButton();
   }
 
-  // ------------------------------------------------------------------ search
+  // ------------------------------------------------------------------ search (the bar itself is reader/find.js)
   openSearch() {
-    if (!this.book || this.pdf) return;
-    const input = h('input', { type: 'search', placeholder: '在全文中搜索…', 'aria-label': '搜索关键词', autofocus: true, enterKeyHint: 'search' });
-    const status = h('p', { class: 'hint' });
-    const list = h('ul', { class: 'list' });
-    let token = 0;
-    const run = async () => {
-      const q = input.value.trim();
-      const my = ++token;
-      list.replaceChildren();
-      if (!q) { status.textContent = ''; return; }
-      const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
-      let hits = 0;
-      const MAX = 500;
-      const n = this.book.sections.length;
-      for (let i = 0; i < n && hits < MAX; i++) {
-        let t = this.searchCache.get(i);
-        if (t === undefined) { t = await this.book.sectionText(i); if (this.searchCache.size < 400) this.searchCache.set(i, t); }
-        if (my !== token) return;
-        re.lastIndex = 0;
-        let m;
-        const frag = document.createDocumentFragment();
-        while ((m = re.exec(t)) && hits < MAX) {
-          if (m[0].length === 0) { re.lastIndex++; continue; }
-          hits++;
-          const a = Math.max(0, m.index - 18);
-          const before = t.slice(a, m.index), after = t.slice(m.index + m[0].length, m.index + m[0].length + 28);
-          const o = m.index, len = m[0].length, secTitle = this.book.sections[i].title || '';
-          frag.append(h('li', null, h('button', { type: 'button', onclick: async () => { p.close(); await this.gotoTarget(i, { offset: o }); this.highlight(o, o + len); } },
-            h('span', { class: 'snip' }, (a > 0 ? '…' : '') + before, h('mark', null, m[0]), after),
-            h('span', { class: 'sub' }, `${secTitle.slice(0, 14)}`))));
-        }
-        list.append(frag);
-        status.textContent = `已搜索 ${i + 1}/${n} 章，找到 ${hits}${hits >= MAX ? '+' : ''} 处`;
-        if (i % 4 === 3) await sleep(0);
-      }
-      if (my === token) status.textContent = hits ? `共 ${hits}${hits >= MAX ? '+（仅显示前 500 条）' : ''} 处` : '没有找到';
-    };
-    const go = debounce(run, 250);
-    input.addEventListener('input', go);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { go.cancel(); run(); } });
-    const p = openPanel({ title: '搜索', side: 'left', content: [input, status, list], onClose: () => { token++; } });
+    if (!this.book) return;
+    if (this.pdf) { toast('PDF 是图片页面，没有文字层，暂不支持全文搜索', { ms: 3000 }); return; }
+    this.find.open();
   }
 
-  highlight(a, b) {
-    const range = this.pg.rangeFor(a, b);
-    if (!range) return;
-    if (globalThis.CSS && CSS.highlights && globalThis.Highlight) CSS.highlights.set('search', new Highlight(range));
-    else { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+  /** text of one section for searching; cached per book (a few hundred sections at most) */
+  async sectionText(i) {
+    const book = this.book;
+    let t = this.searchCache.get(i);
+    if (t === undefined) {
+      t = await book.sectionText(i);
+      if (book === this.book && this.searchCache.size < 400) this.searchCache.set(i, t);
+    }
+    return t;
   }
-  clearHighlight() { if (globalThis.CSS && CSS.highlights) CSS.highlights.delete('search'); }
 
   // ------------------------------------------------------------------ PDF (render-only)
   async openPdfAt(page) {

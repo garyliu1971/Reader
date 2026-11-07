@@ -6,7 +6,7 @@ import { syncMgr } from '../sync/manager.js';
 import { fieldValue } from '../core/shelfmerge.js';
 import { storageEstimate, persistRequest } from '../store/db.js';
 import { remoteBookId } from '../core/bookid.js';
-import { continueCandidate, ago, DONE_PERCENT } from '../core/recent.js';
+import { continueCandidate, touchedAt, ago, DONE_PERCENT } from '../core/recent.js';
 
 const SORTS = [['recent', '最近阅读'], ['title', '书名'], ['added', '加入时间'], ['progress', '阅读进度']];
 const FILTERS = [['all', '全部'], ['recent', '最近'], ['reading', '在读'], ['unread', '未读'], ['done', '读完'], ['fav', '收藏'], ['cloud', '云端'], ['hidden', '已隐藏']];
@@ -88,7 +88,7 @@ export class ShelfView {
       if (d && d.updated * 1000 > (b.lastRead || 0) && Math.abs(d.percent - percent) >= 0.5) { percent = d.percent; remoteNote = `${d.device} 读到 ${d.percent.toFixed(1)}%`; }
       out.push({
         id: b.id, title: b.title, author: b.author, format: b.format, size: b.size, percent, remoteNote, cloud: false,
-        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), touched: Math.max(b.lastRead || 0, b.openedAt || 0, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source,
+        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), touched: touchedAt(b, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source,
         fav: !!fieldValue(merged, b.id, 'fav', false), hidden: !!fieldValue(merged, b.id, 'hidden', false),
       });
     }
@@ -176,7 +176,7 @@ export class ShelfView {
     if (!e) { this.contBox.replaceChildren(); return; }
     const pct = Math.max(0, Math.min(100, e.percent));
     // floor, not round: 96.6% must not read as 97% (finished) while the book is still offered
-    const where = pct > 0 ? `读到 ${pct < 10 ? pct.toFixed(1) : Math.floor(pct)}%` : '刚打开';
+    const where = pct > 0 ? `读到 ${pct < 10 ? pct.toFixed(1) : Math.floor(pct)}%` : '刚开始';
     // remoteNote ("设备 读到 N%") is set exactly when the percentage comes from another device: it replaces `where`
     const sub = [e.remoteNote || where, ago(e.touched)].filter(Boolean).join(' · ');
     this.contBox.replaceChildren(h('section', { class: 'continue', 'aria-label': '继续阅读' },
@@ -292,6 +292,11 @@ export class ShelfView {
   }
 
   async importFiles(files) {
+    this.importing = (this.importing || 0) + 1;   // the update prompt asks before reloading mid-import
+    try { await this._importFiles(files); } finally { this.importing--; }
+  }
+
+  async _importFiles(files) {
     if (!files.length) return;
     persistRequest().catch(() => {});
     let ok = 0, dup = 0;

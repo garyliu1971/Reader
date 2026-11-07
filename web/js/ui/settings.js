@@ -4,6 +4,7 @@ import { syncMgr } from '../sync/manager.js';
 import { loadSettings, saveSettings, applyTheme } from '../store/settings.js';
 import { storageEstimate, persistRequest, storageMode, db } from '../store/db.js';
 import { checkServerUrl } from '../sync/propfind.js';
+import { corsNote } from '../core/origin.js';
 
 export const APP_VERSION = '0.1.0';
 
@@ -23,7 +24,10 @@ export async function openSettingsDialog({ onChange = () => {} } = {}) {
     urlWarn.hidden = r.ok;
     urlWarn.textContent = r.ok ? '' : r.error;
   };
-  url.addEventListener('input', checkUrl);
+  const corsHint = h('p', { class: 'hint' });
+  const updateCors = () => { corsHint.textContent = corsNote(url.value, location.origin); };
+  updateCors();
+  url.addEventListener('input', () => { checkUrl(); updateCors(); });
 
   const form = () => ({ enabled: enabled.checked, url: url.value, user: user.value, password: pass.value, syncUser: syncUser.value, deviceName: devName.value, deviceId: devId.value });
   const saveBtn = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
@@ -77,7 +81,7 @@ export async function openSettingsDialog({ onChange = () => {} } = {}) {
     h('label', { class: 'field' }, h('span', null, '本设备名称（其他设备显示“某某读到了 xx%”）'), devName),
     h('label', { class: 'field' }, h('span', null, '设备 ID（本设备独有；每台设备只写自己的文件。默认 web-xxxxxx）'), devId),
     h('div', { class: 'row' }, saveBtn, offBtn), msg,
-    h('p', { class: 'hint', text: '服务器必须允许跨域（CORS）。配置示例见仓库 web/README.md。' }),
+    corsHint,
     h('h3', { text: '外观' }), themeSeg,
     h('h3', { text: '存储' }), storageInfo,
     h('div', { class: 'row' },

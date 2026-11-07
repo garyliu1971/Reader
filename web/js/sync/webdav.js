@@ -3,6 +3,7 @@
 // https (or to private/local hosts over http).
 
 import { safeSegment, isHiddenName } from '../core/names.js';
+import { networkHint } from '../core/origin.js';
 import { DavError, parseMultistatus, hostIsPrivate, PROPFIND_MAX_BYTES } from './propfind.js';
 
 export { DavError };
@@ -88,7 +89,7 @@ export class DavClient {
       if (e instanceof DavError) throw e;
       const cancelled = signal && signal.aborted;
       throw new DavError(`${what} ${cancelled ? 'cancelled' : 'failed'}: ${e && e.message ? e.message : e}`
-        + (cancelled ? '' : ' (网络/CORS：请检查服务器的 CORS 配置，见 web/README.md)'));
+        + (cancelled ? '' : networkHint(this.base, globalThis.location && globalThis.location.origin)));
     }
     try {
       const hdrs = {};

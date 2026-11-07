@@ -92,11 +92,12 @@ ok(st.s === 4 && st.at.startsWith('这里是被链接'), 'filepos link jumps to 
 
 // ---- search
 await page.keyboard.press('/'); await wait(400);
-await page.fill('.panel input[type=search]', '许多年以后'); await wait(1500);
-const nHits = await page.locator('.panel .list li').count();
-ok(nHits > 10, 'search finds the word in the book', `n=${nHits}`);
-await page.locator('.panel .list li button').nth(8).click(); await wait(800);
-ok(await page.evaluate(() => !!(CSS.highlights && CSS.highlights.get('search'))), 'search hit highlighted');
+await page.fill('.find-input', '许多年以后'); await wait(1500);
+const nHits = Number((await page.textContent('.find-count')).split('/')[1]);
+ok(nHits > 10, 'search finds the word in the book', `count=${await page.textContent('.find-count')}`);
+await page.keyboard.press('Enter'); await wait(800);
+ok(await page.evaluate(() => !!(CSS.highlights && CSS.highlights.get('search-active'))), 'search hit highlighted');
+await page.keyboard.press('Escape'); await wait(300);
 
 // ---- position restore (persisted layout path), then after a full reload
 await page.evaluate(() => window.__pyreader.reader.showSection(4, { offset: 600 })); await wait(600);

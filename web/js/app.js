@@ -6,6 +6,7 @@ import { ReaderView } from './reader/reader.js';
 import { openSettingsDialog } from './ui/settings.js';
 import { toast } from './ui/dom.js';
 import { storageMode } from './store/db.js';
+import { startUpdates } from './ui/update.js';
 
 const shelfEl = document.getElementById('shelf');
 const readerEl = document.getElementById('reader');
@@ -67,7 +68,10 @@ async function main() {
   window.addEventListener('online', refresh);
 
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
-    navigator.serviceWorker.register('sw.js').catch((e) => console.warn('[sw]', e));
+    startUpdates({
+      isBusy: () => (reader.tts && reader.tts.state !== 'idle' ? '正在朗读' : shelf.importing ? '正在导入书籍' : null),
+      prepareReload: async () => { await reader.saveNow(); syncMgr.flush(); await new Promise((r) => setTimeout(r, 400)); },
+    }).catch((e) => console.warn('[sw]', e));
   }
   window.__pyreader = { shelf, reader, syncMgr };   // handy for debugging / smoke tests
 }
