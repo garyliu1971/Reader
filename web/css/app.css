@@ -112,7 +112,12 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .frame { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
 .frame.scroll { overflow-y: auto; touch-action: pan-y; scrollbar-width: thin; }
 .frame.pdf { display: flex; align-items: center; justify-content: center; }
-.frame.pdf canvas { background: #fff; max-width: 100%; max-height: 100%; }
+.frame.pdf canvas { display: block; background: #fff; max-width: 100%; max-height: 100%; }
+.frame.pdf .pdf-page { position: relative; flex: none; }
+/* invisible selectable text over the canvas (pdf.js TextLayer sets left/top/font-size/transform inline, relative to --scale-factor) */
+.pdf-text { position: absolute; left: 0; top: 0; overflow: hidden; line-height: 1; text-align: initial; user-select: text; -webkit-user-select: text; touch-action: none; }
+.pdf-text :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
+.pdf-text ::selection { background: var(--sel); }
 .frame.pdf canvas.invert { filter: invert(1) hue-rotate(180deg); }
 .content {
   position: absolute; font-family: var(--ff); font-size: var(--fs); line-height: var(--lh); color: var(--fg);
