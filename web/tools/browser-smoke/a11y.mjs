@@ -54,7 +54,9 @@ for (const scheme of ['light', 'dark']) {
   await page.keyboard.press('r'); await wait(500);
   console.log('tts bar visible:', await page.evaluate(() => { const b = document.querySelector('.tts-bar'); return !!b && getComputedStyle(b).display !== 'none'; }));
   await run(page, `reading, tts bar on ${scheme}`);
-  // back on the shelf with the "继续阅读" card showing (the first scan above ran before any book was opened)
+  // back on the shelf with the "继续阅读" card showing (the first scan above ran before any book was opened);
+  // merely opening a book no longer offers it, so move the position first (the first book may be a single page)
+  await page.evaluate(() => window.__pyreader.reader.seekPercent(40)); await wait(1500);
   await page.evaluate(() => window.__pyreader.reader.ctx.goShelf()); await wait(800);
   console.log('continue card visible:', await page.evaluate(() => { const c = document.querySelector('.continue'); return !!c && c.getBoundingClientRect().height > 0; }));
   await run(page, `shelf with continue card ${scheme}`);

@@ -7,9 +7,10 @@ import { TtsReader, pickVoice } from './tts.js';
 import { Translate } from './translate.js';
 import { FindBar } from './find.js';
 import { kvGet, kvSet } from '../store/db.js';
-import { openStored, touchOpened, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
+import { openStored, touchRead, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
+import { DWELL_MS } from '../core/recent.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
 const TAP_ZONE = 0.3;
@@ -308,10 +309,11 @@ export class ReaderView {
         await this.showSection(s, a && a.s === s ? { anchor: a } : { start: true });
       }
       this.quiet = false;
+      this._restoredTop = this.pg.mode === 'scroll' ? this.frame.scrollTop : null;   // the scroll event the restore above queued is not reading
       if (seq !== this.seq) return;
       this.loading.hidden = true;
       this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
-      touchOpened(meta, Math.round(stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0) * 1000)).catch(() => {});
+      this.armDwell(meta.id);
       this.checkRemote(saved);
       this.refreshMarkButton();
       this.maybeShowHint();
@@ -322,7 +324,17 @@ export class ReaderView {
     }
   }
 
+  /** Opening alone is not reading: the book only becomes "continue reading" once progress moves or it stays open (and visible) for DWELL_MS */
+  armDwell(id) {
+    clearTimeout(this._dwellT);
+    this._dwellT = setTimeout(() => {
+      if (!this.active || !this.meta || this.meta.id !== id || document.visibilityState === 'hidden') return;
+      touchRead(id, Math.round(stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0) * 1000)).catch(() => {});
+    }, DWELL_MS);
+  }
+
   closeBook() {
+    clearTimeout(this._dwellT);
     this.hideTr();
     this.find.reset();
     this.contentS = -1;
@@ -693,7 +705,13 @@ export class ReaderView {
 
   onScroll() {
     if (this._scrollT) clearTimeout(this._scrollT);
-    this._scrollT = setTimeout(() => this.pg.syncAnchorFromScroll(), 120);
+    this._scrollT = setTimeout(() => {
+      if (this._restoredTop != null) {
+        if (Math.abs(this.frame.scrollTop - this._restoredTop) < 1) return;   // still where open() put it
+        this._restoredTop = null;
+      }
+      this.pg.syncAnchorFromScroll();
+    }, 120);
   }
 
   markDirty() { if (this.quiet) return; this.dirty = true; this.saveSoon(); }
