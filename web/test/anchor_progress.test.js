@@ -25,6 +25,32 @@ test('percent <-> position round trip, monotonic, empty sections skipped', () =>
   assert.deepEqual(percentToPosition(lens, NaN), { s: 0, f: 0 });
 });
 
+test('comic (image-only) books: percent follows the section index, never a false 100 from a few title characters', () => {
+  const n = 151;
+  const lens = [17, ...new Array(n - 1).fill(0)];   // cover title only, 150 picture sections: the real-world case
+  assert.equal(positionToPercent(lens, 1, 0), 100, 'text lengths alone say "finished" at section 1');
+  const opts = { comic: true };
+  assert.equal(positionToPercent(lens, 0, 0, opts), 0, 'cover = 0');
+  assert.equal(positionToPercent(lens, 0, 1, opts), 0, 'the fraction inside a picture section means nothing');
+  assert.ok(Math.abs(positionToPercent(lens, 61, 0.5, opts) - (61 / 150) * 100) < 1e-9);
+  assert.equal(positionToPercent(lens, n - 1, 0, opts), 100);
+  assert.equal(positionToPercent(lens, 999, 0, opts), 100);
+  assert.equal(positionToPercent(lens, -3, 0, opts), 0);
+  let prev = -1;
+  for (let s = 0; s < n; s++) {
+    const p = positionToPercent(lens, s, 0, opts);
+    assert.ok(p >= prev && (s < n - 1 ? p < 100 : p === 100), `section ${s}: ${p}`);
+    assert.equal(percentToPosition(lens, p, opts).s, s, `round trip of section ${s}`);
+    prev = p;
+  }
+  assert.deepEqual(percentToPosition(lens, 100, opts), { s: n - 1, f: 0 });
+  assert.deepEqual(percentToPosition(lens, 0, opts), { s: 0, f: 0 });
+  assert.equal(positionToPercent([5], 0, 0, opts), 0, 'a single section');
+  // text books are unaffected when the option is absent or false
+  assert.equal(positionToPercent([100, 0, 300, 600], 2, 0.5, { comic: false }), 25);
+  assert.deepEqual(percentToPosition([100, 0, 300, 600], 100, { comic: false }), { s: 3, f: 1 });
+});
+
 test('anchor survives text changes via context, falls back to fraction', () => {
   const text = '甲乙丙丁戊己庚辛壬癸'.repeat(30) + '这里是锚点上下文附近的内容' + '后面还有很多'.repeat(20);
   const off = text.indexOf('锚点上下文');

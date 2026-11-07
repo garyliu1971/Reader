@@ -2,6 +2,7 @@
 // Only requests under this worker's own directory are handled. Everything else (cross-origin WebDAV, or a WebDAV
 // server on the SAME origin: /library, /users, ...) is never touched, so authenticated responses and progress JSON
 // are never cached or served stale (the /tts/ API sits beside the app dir and is skipped explicitly, GET or not). Bump CACHE when shipping a new version.
+// Activation only deletes OLD caches of this app (CACHE_PREFIX): the ImageViewer web app at /iv/ lives on the same origin and keeps its own caches there.
 //
 // Updates: a new worker normally WAITS after install (the open page keeps its own cache generation, so lazily imported
 // modules never come from a different version than the running JS) and activates only when the page asks for it
@@ -12,6 +13,7 @@
 // running page keeps getting its own generation's bytes (a lazy import never mixes in the new deploy).
 // Constants repeat js/core/swupdate.js (a classic worker cannot import it); test/swupdate.test.js keeps them equal.
 const CACHE = 'pyreader-web-v11';
+const CACHE_PREFIX = 'pyreader-web-';
 const MSG_PING = 'pyreader:ping';
 const MSG_SKIP = 'pyreader:skip-waiting';
 const PING_TIMEOUT_MS = 2000;
@@ -20,13 +22,13 @@ const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png',
   'js/app.js', 'js/library.js',
-  'js/core/anchor.js', 'js/core/bookid.js', 'js/core/chapters.js', 'js/core/cloudtts.js', 'js/core/names.js', 'js/core/origin.js', 'js/core/progress.js', 'js/core/sha1.js',
+  'js/core/anchor.js', 'js/core/bookid.js', 'js/core/chapters.js', 'js/core/comic.js', 'js/core/cloudtts.js', 'js/core/handoff.js', 'js/core/names.js', 'js/core/origin.js', 'js/core/progress.js', 'js/core/sha1.js',
   'js/core/recent.js', 'js/core/search.js', 'js/core/shelfmerge.js', 'js/core/sleeptimer.js', 'js/core/swupdate.js', 'js/core/textenc.js',
   'js/parse/epub.js', 'js/parse/mobi.js', 'js/parse/mobicheck.js', 'js/parse/pdf.js', 'js/parse/pdftext.js', 'js/parse/sanitize.js', 'js/parse/textbooks.js', 'js/parse/txt.worker.js', 'js/parse/txtparse.js',
   'js/reader/cloudengine.js', 'js/reader/find.js', 'js/reader/paginator.js', 'js/reader/reader.js', 'js/reader/tts.js', 'js/reader/translate.js',
   'js/store/cloudcfg.js', 'js/store/db.js', 'js/store/settings.js',
   'js/sync/manager.js', 'js/sync/propfind.js', 'js/sync/sync.js', 'js/sync/webdav.js',
-  'js/ui/dom.js', 'js/ui/icons.js', 'js/ui/settings.js', 'js/ui/shelf.js', 'js/ui/update.js',
+  'js/ui/comic.js', 'js/ui/dom.js', 'js/ui/icons.js', 'js/ui/settings.js', 'js/ui/shelf.js', 'js/ui/update.js',
   'vendor/jszip.min.js', 'vendor/marked.esm.js', 'vendor/foliate-mobi.js',
 ];
 
@@ -56,7 +58,7 @@ self.addEventListener('message', (e) => {
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (e) => {

@@ -15,6 +15,17 @@ test('every app module under js/ is in the service worker precache list (offline
   for (const f of listed) assert.ok(existsSync(join(web, f)), `${f} listed in sw.js but missing on disk`);
 });
 
+test('service worker: cache name is versioned under the app prefix and only that prefix is cleaned up (a /iv/ worker keeps its caches)', () => {
+  const sw = readFileSync(join(web, 'sw.js'), 'utf8');
+  const cache = /const CACHE = '([^']+)'/.exec(sw)[1];
+  const prefix = /const CACHE_PREFIX = '([^']+)'/.exec(sw)[1];
+  assert.ok(prefix.length >= 8 && cache.startsWith(prefix), `${cache} must start with ${prefix}`);
+  assert.match(cache, /-v\d+$/);
+  const activate = /addEventListener\('activate'[\s\S]*?\}\);/.exec(sw)[0];
+  assert.match(activate, /k\.startsWith\(CACHE_PREFIX\) && k !== CACHE/);
+  assert.ok(!/ks\.filter\(\(k\) => k !== CACHE\)/.test(activate), 'must not delete every other cache');
+});
+
 test('manifest icons exist and index.html assets resolve', () => {
   const m = JSON.parse(readFileSync(join(web, 'manifest.webmanifest'), 'utf8'));
   assert.ok(m.name && m.start_url && m.display === 'standalone');

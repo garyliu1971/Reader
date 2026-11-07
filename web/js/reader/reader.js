@@ -14,6 +14,8 @@ import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from 
 import { stampNow } from '../core/progress.js';
 import { aliasIds, localBookId } from '../core/bookid.js';
 import { normalizeSelection } from '../parse/pdftext.js';
+import { ivUrl } from '../core/handoff.js';
+import { comicPrompt } from '../ui/comic.js';
 import { DWELL_MS } from '../core/recent.js';
 import { navDir } from '../core/search.js';
 import { makeTimer, isDue, timerLabel, activeChoice, SLEEP_MINUTES } from '../core/sleeptimer.js';
@@ -33,7 +35,7 @@ const isDarkNow = () => {
 export class ReaderView {
   /**
    * @param root container element
-   * @param ctx {goShelf(), onProgress(info), fetchRemoteProgress(bid), now()}
+   * @param ctx {goShelf(), readAnyway(id), onProgress(info), fetchRemoteProgress(bid), now()}
    */
   constructor(root, ctx) {
     this.root = root;
@@ -287,7 +289,8 @@ export class ReaderView {
   setBars(on) { this.root.classList.toggle('bars-on', on); }
 
   // ------------------------------------------------------------------ opening
-  async open(id) {
+  /** @param opts.anyway read an image-only book (comic epub) here: the shelf's choice panel was answered with 仍在此阅读 */
+  async open(id, { anyway = false } = {}) {
     const seq = ++this.seq;
     this.active = true;
     this.loading.hidden = false;
@@ -300,6 +303,7 @@ export class ReaderView {
       this.applySettings(false);
       const { meta, book } = await openStored(id);
       if (seq !== this.seq) { book.close(); return; }
+      if (meta.comic && !anyway) { book.close(); this.offerComic(meta); return; }
       this.meta = meta;
       this.book = book;
       this.pdf = book.format === 'pdf';
@@ -332,6 +336,7 @@ export class ReaderView {
       this.loading.hidden = true;
       this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
       this.armDwell(meta.id);
+      if (meta.comic) this.showComicNote(meta);
       this.checkRemote(saved);
       this.refreshMarkButton();
       this.maybeShowHint();
@@ -341,6 +346,34 @@ export class ReaderView {
       this.loading.append(h('div', { class: 'row', style: 'margin-left:12px' }, h('button', { class: 'btn', type: 'button', onclick: () => this.ctx.goShelf() }, '返回书架')));
     }
   }
+
+  /**
+   * An image-only book reached the reader without the shelf's choice (deep link, old history entry, first open of a row
+   * saved before detection): same choice panel. The history entry is replaced FIRST, so Back never returns to a
+   * #/read/ entry that would open this panel again.
+   */
+  offerComic(meta) {
+    history.replaceState(null, '', '#/');
+    this.titleEl.textContent = meta.title;
+    this.loading.hidden = false;
+    this.loading.textContent = meta.title;
+    this.choice = comicPrompt({
+      title: meta.title, rel: meta.rel, ppd: meta.ppd || null, bid: meta.id,
+      onAnyway: () => this.ctx.readAnyway(meta.id),
+      onCancel: () => this.ctx.goShelf(),
+    });
+  }
+
+  showComicNote(meta) {
+    const url = meta.rel ? ivUrl(meta.rel, { ppd: meta.ppd || null, bid: meta.id }) : '';
+    this.comicNote = h('div', { class: 'banner comic-note', role: 'status' },
+      h('span', null, '图片型漫画：这里只能逐页阅读。'),
+      url && h('a', { class: 'btn small primary', href: url, target: '_blank', rel: 'noopener' }, '在 ImageViewer 打开'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => this.hideComicNote() }, '知道了'));
+    this.root.append(this.comicNote);
+  }
+
+  hideComicNote() { if (this.comicNote) { this.comicNote.remove(); this.comicNote = null; } }
 
   /** Opening alone is not reading: the book only becomes "continue reading" once progress moves or it stays open (and visible) for DWELL_MS */
   armDwell(id) {
@@ -353,6 +386,8 @@ export class ReaderView {
 
   closeBook() {
     clearTimeout(this._dwellT);
+    this.hideComicNote();
+    if (this.choice) { this.choice.dismiss(); this.choice = null; }
     this.hideTr();
     this.find.reset();
     this.contentS = -1;
@@ -741,7 +776,7 @@ export class ReaderView {
   async seekPercent(p) {
     if (!this.book) return;
     if (this.pdf) { await this.setPdfPage(Math.min(this.book.pageCount - 1, Math.max(0, Math.round((p / 100) * this.book.pageCount - 0.5))), true); return; }
-    const { s, f } = percentToPosition(this.book.lens, p);
+    const { s, f } = percentToPosition(this.book.lens, p, { comic: !!this.meta.comic });
     if (s !== this.s) await this.showSection(s, { fraction: f });
     else this.pg.gotoOffset(this.pg.skipBlank(Math.round(f * this.pg.total)));
     this.markDirty();
@@ -804,7 +839,7 @@ export class ReaderView {
     const last = this.s === this.book.sections.length - 1;
     const atEnd = pg.mode === 'paged' ? pg.page + pg.cols >= pg.pageCount : pg.frame.scrollTop + pg.frame.clientHeight >= pg.frame.scrollHeight - 2;
     const frac = last && atEnd ? 1 : pg.total ? pg.currentOffset() / pg.total : 0;
-    return positionToPercent(this.book.lens, this.s, frac);
+    return positionToPercent(this.book.lens, this.s, frac, { comic: !!this.meta.comic });
   }
 
   anchor() {

@@ -12,23 +12,27 @@ export function cumulative(lens) {
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
-/** (section, fraction inside section) -> percent 0..100 */
-export function positionToPercent(lens, s, frac) {
+/**
+ * (section, fraction inside section) -> percent 0..100.
+ * `comic` (image-only book, see core/comic.js): text lengths mean nothing (a title page of a few characters would make every
+ * later section "100%"), so the position is the section index: 0 on the first section, 100 on the last.
+ */
+export function positionToPercent(lens, s, frac, { comic = false } = {}) {
   const cum = cumulative(lens);
   const total = cum[lens.length];
-  if (!total) return lens.length > 1 ? clamp((s / (lens.length - 1)) * 100, 0, 100) : 0;
+  if (!total || comic) return lens.length > 1 ? clamp((s / (lens.length - 1)) * 100, 0, 100) : 0;
   const si = clamp(s, 0, lens.length - 1);
   return clamp(((cum[si] + clamp(frac, 0, 1) * (lens[si] || 0)) / total) * 100, 0, 100);
 }
 
-/** percent -> {s, f}. Binary search over cumulative lengths. */
-export function percentToPosition(lens, percent) {
+/** percent -> {s, f}. Binary search over cumulative lengths (by section index for `comic`, the inverse of positionToPercent). */
+export function percentToPosition(lens, percent, { comic = false } = {}) {
   const n = lens.length;
   if (!n) return { s: 0, f: 0 };
   const cum = cumulative(lens);
   const total = cum[n];
   const p = clamp(Number.isFinite(percent) ? percent : 0, 0, 100);
-  if (!total) return { s: n > 1 ? Math.round((p / 100) * (n - 1)) : 0, f: 0 };
+  if (!total || comic) return { s: n > 1 ? Math.round((p / 100) * (n - 1)) : 0, f: 0 };
   const target = (p / 100) * total;
   let lo = 0, hi = n - 1;
   while (lo < hi) {   // last section whose start <= target

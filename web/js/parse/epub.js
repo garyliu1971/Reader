@@ -48,15 +48,19 @@ function xml(text) {
 const byTag = (root, name) => Array.from(root.getElementsByTagNameNS('*', name));
 const first = (root, name) => root.getElementsByTagNameNS('*', name)[0] || null;
 
-/** plain-text length + first heading of a spine document, without building a DOM (cheap enough for 1000s of files) */
+/**
+ * plain-text length + first heading of a spine document, without building a DOM (cheap enough for 1000s of files).
+ * Also what the comic detector (core/comic.js) needs: image count (<img>, <svg><image>) and visible characters without whitespace.
+ */
 export function scanMarkup(raw) {
   let s = raw.replace(/<head[\s\S]*?<\/head>/i, '').replace(/<(script|style)[\s\S]*?<\/\1\s*>/gi, '');
   const hm = /<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]\s*>/i.exec(s);
   const strip = (x) => x.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Math.min(+d, 0x10ffff) || 32)).replace(/\s+/g, ' ').trim();
   const title = hm ? strip(hm[1]).slice(0, 80) : '';
+  const imgs = (s.match(/<img\b/gi) || []).length + (s.match(/<image\b/gi) || []).length;
   s = strip(s.replace(/([　-鿿])\s*\n\s*(?=[　-鿿])/g, '$1'));
-  return { len: s.length, title };
+  return { len: s.length, title, imgs, chars: s.replace(/\s/g, '').length };
 }
 
 export async function openEpub(blob) {
@@ -97,7 +101,14 @@ export async function openEpub(blob) {
     if (id) manifest[id] = { id, href: resolvePath(opfDir, it.getAttribute('href') || ''), type: it.getAttribute('media-type') || '', props: it.getAttribute('properties') || '' };
   }
   const spineEl = first(opf, 'spine');
-  const spineIds = spineEl ? byTag(spineEl, 'itemref').filter((r) => r.getAttribute('linear') !== 'no').map((r) => r.getAttribute('idref')) : [];
+  const itemrefs = spineEl ? byTag(spineEl, 'itemref') : [];
+  let linear = itemrefs.filter((r) => r.getAttribute('linear') !== 'no');
+  if (!linear.length) linear = itemrefs;   // every item marked linear="no": read them all rather than refuse the book
+  const spineIds = linear.map((r) => r.getAttribute('idref'));
+  const bookTypeMeta = meta && byTag(meta, 'meta').find((m) => (m.getAttribute('name') || '').toLowerCase() === 'book-type');
+  const bookType = ((bookTypeMeta && bookTypeMeta.getAttribute('content')) || '').trim().toLowerCase();
+  const ppdAttr = ((spineEl && spineEl.getAttribute('page-progression-direction')) || '').trim().toLowerCase();
+  const ppd = ppdAttr === 'rtl' || ppdAttr === 'ltr' ? ppdAttr : null;
   // `docs` = spine documents. `sections` (public) = reading units: a document, or - for a very large document - several
   // parts of ~40k characters, because multi-column layout of one million-character chapter takes seconds per page turn.
   const docs = spineIds.map((id) => manifest[id]).filter((m) => m && /x?html|xml/i.test(m.type || 'html')).map((m) => ({ id: m.id, path: m.href, heading: '', len: 0 }));
@@ -227,6 +238,8 @@ export async function openEpub(blob) {
 
   const book = {
     format: 'epub', title, author, language, docs, sections: [], toc: [], lens: [],
+    bookType, ppd,   // OPF <meta name="book-type"> (lower case, '') and <spine page-progression-direction> ('rtl' | 'ltr' | null)
+    docStats: null,  // set by scan(): [{imgs, chars}] per spine document, the input of core/comic.js detectComic
     /** (re)build sections/toc/lens from docLens + parts spec */
     layout(docLensIn, headings, specIn) {
       docLens = docLensIn;
@@ -258,16 +271,18 @@ export async function openEpub(blob) {
     /** what must be persisted to open the book again without scanning */
     layoutData() { return { docLens, headings: docs.map((d) => d.heading), parts: spec }; },
     async scan(onProgress) {
-      const lensOut = [], parts = [];
+      const lensOut = [], parts = [], stats = [];
       for (let i = 0; i < docs.length; i++) {
         const t = await text(docs[i].path);
         const r = scanMarkup(t || '');
         lensOut.push(r.len);
+        stats.push({ imgs: r.imgs, chars: r.chars });
         docs[i].heading = r.title;
         parts.push(r.len > SPLIT_LEN ? await buildParts(i) : null);
         if (onProgress && i % 8 === 0) { onProgress((i + 1) / docs.length); await new Promise((res) => setTimeout(res, 0)); }
       }
       textCache = null;
+      this.docStats = stats;
       this.layout(lensOut, docs.map((d) => d.heading), parts);
       return this.lens;
     },
