@@ -5,6 +5,7 @@ from .pdf import load_pdf, load_kindle
 from .docx import load_docx
 from .pptx import load_pptx
 from .cache import load_cache, save_cache
+from .comic import IMAGE_EPUB_MESSAGE, ImageEpubError
 from .shelf import MEDIA_EXTS
 
 # ============ 后台加载（不阻塞 UI） ============
@@ -85,6 +86,9 @@ class BookLoader(QObject):
 
             self.loaded.emit(text, chapters, title, extra)
 
+        except ImageEpubError as e:
+            # 只有图片的 .epub：用固定消息通知主窗口改用漫画阅读器（MainWindow._on_load_failed 认这条）；由 azw3 转出的 epub 漫画阅读器打不开原文件，照普通失败处理
+            self.failed.emit(IMAGE_EPUB_MESSAGE if os.path.splitext(self.path)[1].lower() == ".epub" else str(e))
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -109,5 +113,7 @@ class BookLoader(QObject):
                 with open(self.path, "rb") as f:
                     raw = f.read()
                 return decode_plain_text(raw)
+        except ImageEpubError:
+            raise                          # 缓存里记着旧的文字书章节也不能绕过：交给 run() 分流
         except Exception:
             return None

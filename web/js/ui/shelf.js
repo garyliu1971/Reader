@@ -5,8 +5,9 @@ import { allBooks, importBlob, removeBook, coverUrl, ACCEPT, formatOf } from '..
 import { syncMgr } from '../sync/manager.js';
 import { fieldValue } from '../core/shelfmerge.js';
 import { storageEstimate, persistRequest } from '../store/db.js';
-import { remoteBookId } from '../core/bookid.js';
+import { remoteBookId, aliasIds } from '../core/bookid.js';
 import { continueCandidate, touchedAt, ago, DONE_PERCENT } from '../core/recent.js';
+import { comicPrompt } from './comic.js';
 
 const SORTS = [['recent', '最近阅读'], ['title', '书名'], ['added', '加入时间'], ['progress', '阅读进度']];
 const FILTERS = [['all', '全部'], ['recent', '最近'], ['reading', '在读'], ['unread', '未读'], ['done', '读完'], ['fav', '收藏'], ['cloud', '云端'], ['hidden', '已隐藏']];
@@ -82,13 +83,13 @@ export class ShelfView {
     const have = new Set();
     for (const b of books) {
       have.add(b.id);
-      const d = digest[b.id];
+      const d = [digest[b.id], ...aliasIds(b).map((a) => digest[a])].filter(Boolean).sort((x, y) => y.updated - x.updated)[0];
       let percent = b.percent || 0;
       let remoteNote = '';
       if (d && d.updated * 1000 > (b.lastRead || 0) && Math.abs(d.percent - percent) >= 0.5) { percent = d.percent; remoteNote = `${d.device} 读到 ${d.percent.toFixed(1)}%`; }
       out.push({
         id: b.id, title: b.title, author: b.author, format: b.format, size: b.size, percent, remoteNote, cloud: false,
-        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), touched: touchedAt(b, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source,
+        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), touched: touchedAt(b, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source, comic: !!b.comic, ppd: b.ppd || null,
         fav: !!fieldValue(merged, b.id, 'fav', false), hidden: !!fieldValue(merged, b.id, 'hidden', false),
       });
     }
@@ -214,8 +215,18 @@ export class ShelfView {
   }
 
   async openEntry(e) {
-    if (!e.cloud) { this.ctx.open(e.id); return; }
+    if (!e.cloud) { this.openLocal(e); return; }
     await this.downloadAndOpen(e);
+  }
+
+  /** an image-only book (comic epub) is offered to ImageViewer first; nothing is pushed to the history until the reader is chosen */
+  openLocal(e) {
+    if (!e.comic) { this.ctx.open(e.id); return; }
+    comicPrompt({
+      title: e.title, rel: e.rel, ppd: e.ppd, bid: e.id,
+      onUpload: !e.rel && syncMgr.enabled() && e.source === 'local' ? () => this.uploadDialog(e) : null,
+      onAnyway: () => this.ctx.open(e.id, { anyway: true }),
+    });
   }
 
   async downloadAndOpen(e, { open = true } = {}) {
@@ -231,7 +242,7 @@ export class ShelfView {
       const { meta } = await importBlob(file, { name: baseName(e.rel), remote: { rel: e.rel, size: e.size, mtime: e.mtime || 0 }, onStatus: (m) => { label.textContent = m; } });
       t.remove();
       await this.render();
-      if (open) this.ctx.open(meta.id);
+      if (open) this.openLocal({ id: meta.id, title: meta.title, rel: meta.rel, ppd: meta.ppd || null, comic: !!meta.comic, source: meta.source, format: meta.format });
     } catch (err) {
       t.remove();
       toast(`下载失败：${err && err.message ? err.message : err}`, { ms: 6000 });

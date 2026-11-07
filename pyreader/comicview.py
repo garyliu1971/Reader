@@ -79,7 +79,7 @@ class ComicView(QWidget):
 
     # ------------------------------------------------------------------ 公共接口
     def open_comic(self, path: str, page: int = 0) -> bool:
-        """打开 .zip / .cbz。失败（损坏 / 没有图片）返回 False，原因见 last_error()。page 超界会被夹到范围内。"""
+        """打开 .zip / .cbz / 图片型 .epub。失败（损坏 / 没有图片）返回 False，原因见 last_error()。page 超界会被夹到范围内。"""
         self.close_comic()
         try:
             arc = cm.ComicArchive(path)
@@ -181,6 +181,10 @@ class ComicView(QWidget):
             self._rtl = bool(on)
             self.update()
             self.optionsChanged.emit()
+
+    def opf_rtl(self) -> Optional[bool]:
+        """这本书自己声明的阅读方向（epub 的 page-progression-direction）：True 从右往左 / False 从左往右 / None 没声明（zip / cbz 恒为 None）。"""
+        return self._archive.rtl if self._archive is not None else None
 
     def set_theme(self, colors):
         self._bg = colors["bg"]

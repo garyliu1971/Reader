@@ -7,7 +7,7 @@
 //   range(a, b) -> Range for the laid-out section, onToggle(open).
 import { h, openPanel, debounce, sleep } from '../ui/dom.js';
 import { icon } from '../ui/icons.js';
-import { compileQuery, findAll, totalHits, rankOf, stepHit, seekHit, hitAtOrAfter, sectionOrder, snippet, MAX_HITS, MAX_QUERY } from '../core/search.js';
+import { navDir, compileQuery, findAll, totalHits, rankOf, stepHit, seekHit, hitAtOrAfter, sectionOrder, snippet, MAX_HITS, MAX_QUERY } from '../core/search.js';
 
 const LIST_MAX = 500;
 const PAINT_BEFORE = 100, PAINT_AFTER = 200;   // highlight only the hits around the reading position: a common word has thousands
@@ -52,7 +52,7 @@ export class FindBar {
       if (performance.now() - this.compEnd < 40) return;   // that Enter only committed the IME text
       if (this.input.value !== this.q) { this.go.cancel(); this.run(); } else this.step(e.shiftKey ? -1 : 1);
     } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close(); }
-    else if (e.key === 'F3') { e.preventDefault(); this.step(e.shiftKey ? -1 : 1); }
+    else if (navDir(e)) { e.preventDefault(); this.step(navDir(e)); }   // F3 / Ctrl+G, Shift = previous
     else if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); this.input.select(); }
   }
 

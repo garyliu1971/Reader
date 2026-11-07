@@ -112,7 +112,12 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .frame { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
 .frame.scroll { overflow-y: auto; touch-action: pan-y; scrollbar-width: thin; }
 .frame.pdf { display: flex; align-items: center; justify-content: center; }
-.frame.pdf canvas { background: #fff; max-width: 100%; max-height: 100%; }
+.frame.pdf canvas { display: block; background: #fff; max-width: 100%; max-height: 100%; }
+.frame.pdf .pdf-page { position: relative; flex: none; }
+/* invisible selectable text over the canvas (pdf.js TextLayer sets left/top/font-size/transform inline, relative to --scale-factor) */
+.pdf-text { position: absolute; left: 0; top: 0; overflow: hidden; line-height: 1; text-align: initial; user-select: text; -webkit-user-select: text; touch-action: none; }
+.pdf-text :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
+.pdf-text ::selection { background: var(--sel); }
 .frame.pdf canvas.invert { filter: invert(1) hue-rotate(180deg); }
 .content {
   position: absolute; font-family: var(--ff); font-size: var(--fs); line-height: var(--lh); color: var(--fg);
@@ -182,11 +187,16 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .reader.bars-on .tts-bar { bottom: calc(env(safe-area-inset-bottom) + 84px); }
 .tts-bar .state { padding: 0 6px; color: var(--muted); white-space: nowrap; }
 .tts-bar .icon-btn { width: 40px; height: 40px; }
+/* sleep timer: countdown / "定时" button inside the bar; .on = armed */
+.tts-bar .sleep-btn { min-width: 52px; height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: none; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tts-bar .sleep-btn.on { color: var(--accent); border-color: var(--accent); }
+.list li > button.danger { color: var(--danger); }
 .tts-bar .rate { min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
 .bottombar .line { display: flex; align-items: center; gap: 8px; }
 .bottombar .pctlabel { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; font-size: 14px; }
 .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); background: var(--bg); z-index: 25; }
 .banner { position: absolute; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 56px); z-index: 40; background: var(--surface); border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,.25); border-radius: 10px; padding: 8px 12px; display: flex; gap: 8px; align-items: center; max-width: calc(100% - 24px); font-size: 14px; }
+.banner.comic-note { top: calc(env(safe-area-inset-top) + 108px); }
 
 /* ---------------------------------------------------------------- overlays: drawers and dialogs never resize the page */
 .overlay-root { position: fixed; inset: 0; z-index: 100; }

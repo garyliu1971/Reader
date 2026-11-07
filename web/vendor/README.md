@@ -22,4 +22,4 @@ Notes
 * EPUB parsing uses JSZip directly instead of epub.js: we need our own pagination, text-offset anchors and TOC handling,
   and epub.js's iframe-per-chapter rendition cannot give stable offsets across reflows.
 * `foliate-mobi.js` (MOBI/AZW3 parser) is lazily imported as an ES module on the first MOBI. It does NOT check DRM, truncation, KFX or Print Replica: `js/parse/mobicheck.js` does that before it is called, and its `section.load()` HTML is never displayed (only `createDocument()` through our sanitizer).
-* Both ".min" files are exactly what the package publishes; we do not use pdf.js's viewer, text layer or annotation layer in v1.
+* Both ".min" files are exactly what the package publishes; we use pdf.js's `TextLayer` (invisible selectable text over the canvas) but not its viewer or annotation layer.

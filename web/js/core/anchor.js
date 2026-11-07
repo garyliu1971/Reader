@@ -12,23 +12,36 @@ export function cumulative(lens) {
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
-/** (section, fraction inside section) -> percent 0..100 */
-export function positionToPercent(lens, s, frac) {
+/**
+ * (section, fraction inside section) -> percent 0..100.
+ * `comic` (image-only book, see core/comic.js): text lengths mean nothing (a title page of a few characters would make every
+ * later section "100%"), so sections count equally: (s + fraction inside the section) / n. 0 on the start of the first section,
+ * 100 only at the very end of the last one; a single long page (webtoon) still reports real progress through its fraction.
+ */
+export function positionToPercent(lens, s, frac, { comic = false } = {}) {
   const cum = cumulative(lens);
   const total = cum[lens.length];
-  if (!total) return lens.length > 1 ? clamp((s / (lens.length - 1)) * 100, 0, 100) : 0;
+  if (!total || comic) {
+    const n = lens.length;
+    if (!n || s < 0) return 0;
+    return s >= n ? 100 : clamp(((s + clamp(frac, 0, 1)) / n) * 100, 0, 100);
+  }
   const si = clamp(s, 0, lens.length - 1);
   return clamp(((cum[si] + clamp(frac, 0, 1) * (lens[si] || 0)) / total) * 100, 0, 100);
 }
 
-/** percent -> {s, f}. Binary search over cumulative lengths. */
-export function percentToPosition(lens, percent) {
+/** percent -> {s, f}. Binary search over cumulative lengths (equal-weight sections for `comic`, the inverse of positionToPercent). */
+export function percentToPosition(lens, percent, { comic = false } = {}) {
   const n = lens.length;
   if (!n) return { s: 0, f: 0 };
   const cum = cumulative(lens);
   const total = cum[n];
   const p = clamp(Number.isFinite(percent) ? percent : 0, 0, 100);
-  if (!total) return { s: n > 1 ? Math.round((p / 100) * (n - 1)) : 0, f: 0 };
+  if (!total || comic) {
+    const x = (p / 100) * n;
+    const s = clamp(Math.floor(x + 1e-9), 0, n - 1);   // epsilon: positionToPercent(s, 0) must come back as section s
+    return { s, f: clamp(x - s, 0, 1) };
+  }
   const target = (p / 100) * total;
   let lo = 0, hi = n - 1;
   while (lo < hi) {   // last section whose start <= target

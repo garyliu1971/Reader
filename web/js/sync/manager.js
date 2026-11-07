@@ -105,16 +105,16 @@ export const syncMgr = {
 
   // ---------------------------------------------------------------- reading hooks
   /** called by the reader after each saved position */
-  onProgress({ bid, percent, chapter, updated }) {
+  onProgress({ bid, aliases = [], percent, chapter, updated }) {
     const e = this.engine;
     if (!e) return;
-    try { e.recordProgress(bid, percent, updated); } catch (err) { console.warn(err); }
+    try { e.recordProgress(bid, percent, updated); for (const a of aliases) e.recordProgress(a, percent, updated); } catch (err) { console.warn(err); }
     e.persist().catch(() => {});
     this.shelfChanged && this.shelfChanged();
     if (!this.enabled()) return;
     let t = this._bookTimers.get(bid);
     if (!t) { t = debounce(() => this.pushBook(bid), 4000); this._bookTimers.set(bid, t); }
-    t.latest = { percent, chapter, updated };
+    t.latest = { percent, chapter, updated, aliases };
     t();
     this._devicePush();
   },
@@ -125,7 +125,7 @@ export const syncMgr = {
     const t = this._bookTimers.get(bid);
     const l = t && t.latest;
     if (!l || !this.enabled()) return null;
-    const r = await this.engine.pushBookProgress({ bid, percent: l.percent, chapter: l.chapter, updated: l.updated });
+    const r = await this.engine.pushBookProgress({ bid, percent: l.percent, chapter: l.chapter, updated: l.updated, aliases: l.aliases });
     if (r.status === 'error') this.setStatus('error', `进度上传失败：${r.message}`);
     return r;
   },
@@ -141,9 +141,9 @@ export const syncMgr = {
     this._devicePush.flush();
   },
 
-  async fetchRemoteProgress(bid) {
+  async fetchRemoteProgress(bid, aliases = []) {
     if (!this.enabled()) return null;
-    return this.engine.pullBookProgress(bid);
+    return this.engine.pullBookProgress(bid, aliases);
   },
 
   setFlag(bid, field, value) {

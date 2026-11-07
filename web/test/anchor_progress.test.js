@@ -25,6 +25,70 @@ test('percent <-> position round trip, monotonic, empty sections skipped', () =>
   assert.deepEqual(percentToPosition(lens, NaN), { s: 0, f: 0 });
 });
 
+test('comic (image-only) books: percent follows (section + fraction) / n, never a false 100 from a few title characters', () => {
+  const n = 151;
+  const lens = [17, ...new Array(n - 1).fill(0)];   // cover title only, 150 picture sections: the real-world case
+  assert.equal(positionToPercent(lens, 1, 0), 100, 'text lengths alone say "finished" at section 1');
+  const opts = { comic: true };
+  assert.equal(positionToPercent(lens, 0, 0, opts), 0, 'cover = 0');
+  assert.ok(Math.abs(positionToPercent(lens, 0, 1, opts) - (1 / n) * 100) < 1e-9, 'end of the cover section is one section in');
+  assert.ok(Math.abs(positionToPercent(lens, 61, 0.5, opts) - (61.5 / n) * 100) < 1e-9);
+  assert.ok(positionToPercent(lens, n - 1, 0, opts) < 100, 'start of the last section is not finished');
+  assert.equal(positionToPercent(lens, n - 1, 1, opts), 100, 'end of the last section');
+  assert.equal(positionToPercent(lens, 999, 0, opts), 100);
+  assert.equal(positionToPercent(lens, -3, 0, opts), 0);
+  assert.equal(positionToPercent([], 0, 0.5, opts), 0);
+  let prev = -1;
+  for (let s = 0; s < n; s++) {
+    for (const f of [0, 0.25, 0.5, 1]) {
+      const p = positionToPercent(lens, s, f, opts);
+      assert.ok(p >= prev, `monotonic at ${s}/${f}: ${p} < ${prev}`);
+      assert.ok(s === n - 1 && f === 1 ? p === 100 : p < 100, `no false 100 at ${s}/${f}: ${p}`);
+      prev = p;
+    }
+    const p0 = positionToPercent(lens, s, 0, opts);
+    const at = percentToPosition(lens, p0, opts);
+    assert.equal(at.s, s, `round trip of section ${s}`);
+    assert.ok(at.f < 1e-9, `fraction noise only: ${at.f}`);
+    const back = percentToPosition(lens, positionToPercent(lens, s, 0.5, opts), opts);
+    assert.equal(back.s, s);
+    assert.ok(Math.abs(back.f - 0.5) < 1e-6);
+  }
+  assert.deepEqual(percentToPosition(lens, 100, opts), { s: n - 1, f: 1 });
+  assert.deepEqual(percentToPosition(lens, 0, opts), { s: 0, f: 0 });
+  assert.deepEqual(percentToPosition([], 50, opts), { s: 0, f: 0 });
+  // text books are unaffected when the option is absent or false
+  assert.equal(positionToPercent([100, 0, 300, 600], 2, 0.5, { comic: false }), 25);
+  assert.deepEqual(percentToPosition([100, 0, 300, 600], 100, { comic: false }), { s: 3, f: 1 });
+});
+
+test('comic with a single section (webtoon, one long xhtml): the fraction is the progress, never stuck at 0', () => {
+  const opts = { comic: true };
+  for (const lens of [[0], [12]]) {   // no text at all, or a few characters of caption
+    assert.equal(positionToPercent(lens, 0, 0, opts), 0, 'cover = 0');
+    assert.equal(positionToPercent(lens, 0, 0.5, opts), 50);
+    assert.ok(Math.abs(positionToPercent(lens, 0, 0.9, opts) - 90) < 1e-9);
+    assert.equal(positionToPercent(lens, 0, 1, opts), 100, 'end of the page');
+    assert.equal(positionToPercent(lens, 0, 2, opts), 100, 'fraction is clamped');
+    assert.equal(positionToPercent(lens, 0, -1, opts), 0);
+    assert.deepEqual(percentToPosition(lens, 0, opts), { s: 0, f: 0 });
+    assert.deepEqual(percentToPosition(lens, 100, opts), { s: 0, f: 1 });
+    const back = percentToPosition(lens, 37, opts);
+    assert.equal(back.s, 0);
+    assert.ok(Math.abs(back.f - 0.37) < 1e-9);
+  }
+});
+
+test('multi-section comic: section starts split the range evenly and never reach 100 before the last section ends', () => {
+  const opts = { comic: true };
+  const lens = [3, 0, 0, 0];
+  assert.deepEqual([0, 1, 2, 3].map((s) => positionToPercent(lens, s, 0, opts)), [0, 25, 50, 75]);
+  assert.equal(positionToPercent(lens, 3, 0.999, opts) < 100, true);
+  assert.equal(positionToPercent(lens, 3, 1, opts), 100);
+  assert.deepEqual(percentToPosition(lens, 50, opts), { s: 2, f: 0 });
+  assert.deepEqual(percentToPosition(lens, 62.5, opts), { s: 2, f: 0.5 });
+});
+
 test('anchor survives text changes via context, falls back to fraction', () => {
   const text = '甲乙丙丁戊己庚辛壬癸'.repeat(30) + '这里是锚点上下文附近的内容' + '后面还有很多'.repeat(20);
   const off = text.indexOf('锚点上下文');
