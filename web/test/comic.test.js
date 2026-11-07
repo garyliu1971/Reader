@@ -78,6 +78,27 @@ test('scanMarkup measures images and visible characters', () => {
   assert.equal(scanMarkup('<body><p>&nbsp;&#160;&amp;</p></body>').chars, 1, 'non-breaking spaces are whitespace');
 });
 
+test('scanMarkup ignores HTML comments: no images, no characters from them', () => {
+  const r = scanMarkup('<body><!-- <img src="old.jpg"/> hidden caption --><p>ab</p><!--\n<img src="x"/>\n<image href="y"/>\n--><img src="real.jpg"/></body>');
+  assert.equal(r.imgs, 1);
+  assert.equal(r.chars, 2);
+  assert.equal(r.len, 2);
+  assert.deepEqual(scanMarkup('<body><!-- only a comment --></body>'), { len: 0, title: '', imgs: 0, chars: 0 });
+  assert.equal(scanMarkup('<body><!-- <h1>Not a title</h1> --><h2>Real</h2></body>').title, 'Real');
+});
+
+test('scanMarkup decodes numeric, hex and common named entities before counting', () => {
+  assert.equal(scanMarkup('<p>&#x4e2d;&#20013;&#X4E2D;</p>').chars, 3, 'a reference is one visible character');
+  assert.equal(scanMarkup('<p>&#x4e2d;&#x6587;</p>').len, 2);
+  assert.equal(scanMarkup('<p>&#x1F600;</p>').chars, 2, 'astral code point = one surrogate pair, like the DOM text length');
+  assert.equal(scanMarkup('<p>&amp;&lt;&gt;&quot;&apos;</p>').chars, 5);
+  assert.equal(scanMarkup('<p>&amp;lt;</p>').len, 4, '"&lt;" literal text: decoded once only');
+  assert.equal(scanMarkup('<p>&nbsp;&#160;&#xA0; </p>').chars, 0, 'non-breaking spaces are whitespace');
+  assert.equal(scanMarkup('<p>&#0;&#xD800;&#x110000;</p>').chars, 3, 'invalid code points become one replacement char each');
+  assert.equal(scanMarkup('<p>&unknown;</p>').chars, '&unknown;'.length, 'unknown names are left alone');
+  assert.equal(scanMarkup('<h1>&#x4e2d;&amp;A</h1>').title, '中&A');
+});
+
 test('scanMarkup + detectComic on a generated 100-page image book and a text book', () => {
   const comicPage = (i) => scanMarkup(`<html><head><title>p${i}</title></head><body><img src="images/${i}.jpg"/></body></html>`);
   const stats = [scanMarkup('<body><h1>チ。</h1><img src="cover.jpg"/></body>'), ...Array.from({ length: 100 }, (_, i) => comicPage(i)), scanMarkup('<body><p>end</p></body>')];

@@ -53,14 +53,24 @@ const first = (root, name) => root.getElementsByTagNameNS('*', name)[0] || null;
  * Also what the comic detector (core/comic.js) needs: image count (<img>, <svg><image>) and visible characters without whitespace.
  */
 export function scanMarkup(raw) {
-  let s = raw.replace(/<head[\s\S]*?<\/head>/i, '').replace(/<(script|style)[\s\S]*?<\/\1\s*>/gi, '');
+  // comments first (like pyreader/comic.py): an <img> or text inside <!-- --> is neither an image nor visible
+  let s = raw.replace(/<!--[\s\S]*?-->/g, '').replace(/<head[\s\S]*?<\/head>/i, '').replace(/<(script|style)[\s\S]*?<\/\1\s*>/gi, '');
   const hm = /<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]\s*>/i.exec(s);
-  const strip = (x) => x.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Math.min(+d, 0x10ffff) || 32)).replace(/\s+/g, ' ').trim();
+  const strip = (x) => unescapeEntities(x.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
   const title = hm ? strip(hm[1]).slice(0, 80) : '';
   const imgs = (s.match(/<img\b/gi) || []).length + (s.match(/<image\b/gi) || []).length;
   s = strip(s.replace(/([　-鿿])\s*\n\s*(?=[　-鿿])/g, '$1'));
   return { len: s.length, title, imgs, chars: s.replace(/\s/g, '').length };
+}
+
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+/** one pass (so "&amp;lt;" stays "&lt;"): numeric decimal/hex references and the common named ones; anything else is left as is */
+function unescapeEntities(x) {
+  return x.replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z]+));/g, (m, dec, hex, name) => {
+    if (name) return Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, name) ? NAMED_ENTITIES[name] : m;
+    const cp = dec ? parseInt(dec, 10) : parseInt(hex, 16);
+    return !cp || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? '�' : String.fromCodePoint(cp);
+  });
 }
 
 export async function openEpub(blob) {

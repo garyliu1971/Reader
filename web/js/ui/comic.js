@@ -11,12 +11,13 @@ import { ivUrl } from '../core/handoff.js';
 export function comicPrompt({ title, rel, ppd = null, bid = null, onUpload = null, onAnyway, onCancel = () => {} }) {
   let chosen = false;
   const choose = (fn) => () => { chosen = true; p.close(); fn(); };
-  const url = rel ? ivUrl(rel, { ppd, bid }) : '';
+  const url = rel ? ivUrl(rel, { ppd, bid }) : '';   // null: the library path is unusable (".." / empty segment): only reading here is offered
+  const badPath = !!rel && url === null;
   const actions = [];
   if (url) {
     // a plain link (new tab): the PWA scope is /reader/, so /iv/ is another app; navigation keeps the reader's history untouched
     actions.push(h('a', { class: 'btn primary', href: url, target: '_blank', rel: 'noopener', autofocus: true, onclick: () => setTimeout(() => p.close(), 0) }, '在 ImageViewer 打开'));
-  } else if (onUpload) {
+  } else if (onUpload && !badPath) {
     actions.push(h('button', { class: 'btn primary', type: 'button', autofocus: true, onclick: choose(onUpload) }, '先上传到云端书库…'));
   }
   actions.push(h('button', { class: 'btn', type: 'button', autofocus: !actions.length, onclick: choose(onAnyway) }, '仍在此阅读'));
@@ -26,7 +27,8 @@ export function comicPrompt({ title, rel, ppd = null, bid = null, onUpload = nul
     content: [
       h('p', { text: title }),
       h('p', { class: 'hint', text: '整本书都是图片页。在这里只能一页一页地看，没有双页和从右往左翻页；ImageViewer 更适合阅读漫画。' }),
-      !url && h('p', { class: 'hint', text: onUpload ? '这本书只在本机，要用 ImageViewer 阅读，需要先上传到云端书库。' : '这本书不在云端书库里，无法用 ImageViewer 打开（需要先开启 WebDAV 同步并上传）。' }),
+      badPath && h('p', { class: 'hint', text: '这本书在云端书库里的路径无效，无法用 ImageViewer 打开，只能在这里阅读。' }),
+      !url && !badPath && h('p', { class: 'hint', text: onUpload ? '这本书只在本机，要用 ImageViewer 阅读，需要先上传到云端书库。' : '这本书不在云端书库里，无法用 ImageViewer 打开（需要先开启 WebDAV 同步并上传）。' }),
       h('div', { class: 'row end' }, actions),
     ],
     onClose: () => { if (!chosen) onCancel(); },

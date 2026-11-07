@@ -48,7 +48,29 @@ test('ivUrl never carries credentials and rejects path tricks', () => {
   assert.ok(!/^[a-z]+:/i.test(u), 'relative, same-origin');
   assert.equal(ivUrl(''), '');
   assert.equal(ivUrl(null), '');
-  assert.throws(() => ivUrl('a/../b.epub'), /illegal/);
-  assert.throws(() => ivUrl('./b.epub'), /illegal/);
-  assert.throws(() => ivUrl('///'), /illegal/);
+  assert.throws(() => encodeRel('a/../b.epub'), /illegal/, 'encodeRel itself still refuses path tricks');
+  assert.throws(() => encodeRel('./b.epub'), /illegal/);
+  assert.throws(() => encodeRel('///'), /illegal/);
+});
+
+test('ivUrl never throws: null for an unsafe or malformed library path (the prompt then offers only "read here")', () => {
+  for (const bad of ['a/../b.epub', '../b.epub', 'a/..', '..', './b.epub', 'a/./b.epub', '.', 'a//b.epub', '/lead/b.epub', 'trail/', '///', 'a\\..\\b.epub', 'a\\\\b.epub']) {
+    assert.doesNotThrow(() => ivUrl(bad), bad);
+    assert.equal(ivUrl(bad), null, bad);
+  }
+  assert.equal(ivUrl('ok/b.epub', { bid: 'remote:a/../b.epub' }), null, 'the remote: part of the book id is checked too');
+  assert.equal(ivUrl('ok/b.epub', { bid: 'remote:a//b.epub' }), null);
+  assert.equal(ivUrl('', { ppd: 'rtl' }), '', 'empty = no library path, not an error');
+  assert.equal(ivUrl(undefined), '');
+});
+
+test('ivUrl: a dot inside a segment is fine, only whole "." / ".." segments are refused; CJK, spaces, # and % stay valid', () => {
+  for (const rel of ['a/..b/c.epub', 'a/b../c.epub', '.hidden/x.epub', '漫画/卷 1.epub', 'a b/c#d.epub', '100%/x.epub', 'a\\b.epub']) {
+    const u = ivUrl(rel);
+    assert.equal(typeof u, 'string', rel);
+    assert.ok(u.startsWith('/iv/#open='), rel);
+    assert.equal(u.split('#').length, 2, rel);
+    assert.equal(params(u).get('open'), rel.replace(/\\/g, '/'));
+  }
+  assert.ok(ivUrl('100%/x.epub').includes('open=100%25/x.epub'), '% is encoded');
 });
