@@ -12,6 +12,17 @@ export function remoteBookId(rel) {
 }
 
 /** Remote file name of a per-book progress record: sha1(book_id)[:20]. */
+/**
+ * Other ids the SAME book may be keyed by on another device. The Qt app keys a book by "local:"+sha1(name+size) when it
+ * reads it from an ordinary folder, but by "remote:<rel>" only for copies under its remote_books cache; the web app
+ * always uses "remote:<rel>" for library downloads. Without aliasing the two sides write/read different progress files.
+ */
+export function aliasIds(meta) {
+  if (!meta || meta.source !== 'remote' || !meta.name || !(meta.size > 0)) return [];
+  const a = localBookId(meta.name, meta.size);
+  return a === meta.id ? [] : [a];
+}
+
 export function progressFileName(bid) {
   return sha1Hex(bid).slice(0, 20) + '.json';
 }

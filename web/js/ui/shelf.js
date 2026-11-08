@@ -5,8 +5,10 @@ import { allBooks, importBlob, removeBook, coverUrl, ACCEPT, formatOf } from '..
 import { syncMgr } from '../sync/manager.js';
 import { fieldValue } from '../core/shelfmerge.js';
 import { storageEstimate, persistRequest } from '../store/db.js';
-import { remoteBookId } from '../core/bookid.js';
+import { remoteBookId, aliasIds } from '../core/bookid.js';
 import { continueCandidate, touchedAt, ago, DONE_PERCENT } from '../core/recent.js';
+import { comicPrompt } from './comic.js';
+import { openOnlineLibrary, ONLINE_LIB_LABEL } from './onlinelib.js';
 
 const SORTS = [['recent', '最近阅读'], ['title', '书名'], ['added', '加入时间'], ['progress', '阅读进度']];
 const FILTERS = [['all', '全部'], ['recent', '最近'], ['reading', '在读'], ['unread', '未读'], ['done', '读完'], ['fav', '收藏'], ['cloud', '云端'], ['hidden', '已隐藏']];
@@ -51,9 +53,35 @@ export class ShelfView {
         h('button', { class: 'icon-btn', type: 'button', 'aria-label': '设置', onclick: () => this.ctx.openSettings() }, icon('gear')),
         h('button', { class: 'btn primary', type: 'button', onclick: () => this.fileInput.click() }, icon('plus', 18), '导入')),
       h('div', { class: 'shelf-tools' }, this.search, this.sortSel),
+      h('div', { class: 'shelf-add' }, this.onlineButton()),
       this.chips, this.syncLine);
     this.root.replaceChildren(head, this.contBox, this.grid, this.fileInput);
     this.renderChips();
+  }
+
+  /** entry to the online library (Gutenberg); one node per place */
+  onlineButton(kind = '') {
+    return h('button', { class: `btn small online-lib-btn ${kind}`.trim(), type: 'button', onclick: () => this.openOnline() }, icon('cloud', 16), ONLINE_LIB_LABEL);
+  }
+
+  openOnline() {
+    return openOnlineLibrary({
+      getBooks: () => allBooks(),
+      importFile: (file, { origin, onStatus }) => this.importOnline(file, { origin, onStatus }),
+      openBook: (id) => { const e = this.entries.find((x) => x.id === id); if (e) this.openLocal(e); else this.ctx.open(id); },
+      openSettings: () => this.ctx.openSettings(),
+    });
+  }
+
+  /** a downloaded online-library epub goes through the same importBlob path as a picked file; origin marks it for 已添加 */
+  async importOnline(file, { origin, onStatus }) {
+    this.importing = (this.importing || 0) + 1;   // the update prompt asks before reloading mid-import
+    try {
+      persistRequest().catch(() => {});
+      const r = await importBlob(file, { name: file.name, origin, onStatus });
+      await this.render();
+      return r.meta;
+    } finally { this.importing--; }
   }
 
   renderChips() {
@@ -82,13 +110,13 @@ export class ShelfView {
     const have = new Set();
     for (const b of books) {
       have.add(b.id);
-      const d = digest[b.id];
+      const d = [digest[b.id], ...aliasIds(b).map((a) => digest[a])].filter(Boolean).sort((x, y) => y.updated - x.updated)[0];
       let percent = b.percent || 0;
       let remoteNote = '';
       if (d && d.updated * 1000 > (b.lastRead || 0) && Math.abs(d.percent - percent) >= 0.5) { percent = d.percent; remoteNote = `${d.device} 读到 ${d.percent.toFixed(1)}%`; }
       out.push({
         id: b.id, title: b.title, author: b.author, format: b.format, size: b.size, percent, remoteNote, cloud: false,
-        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), touched: touchedAt(b, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source,
+        lastRead: Math.max(b.lastRead || 0, d ? d.updated * 1000 : 0), touched: touchedAt(b, d ? d.updated * 1000 : 0), addedAt: b.addedAt, rel: b.rel, source: b.source, comic: !!b.comic, ppd: b.ppd || null,
         fav: !!fieldValue(merged, b.id, 'fav', false), hidden: !!fieldValue(merged, b.id, 'hidden', false),
       });
     }
@@ -147,10 +175,13 @@ export class ShelfView {
     this.urls = [];
     const list = this.view(entries);
     this.grid.replaceChildren();
+    this.grid.toggleAttribute('role', false);   // role=list only while it holds cards (an empty/message-only list fails axe aria-required-children)
+    if (list.length) this.grid.setAttribute('role', 'list');
     this.renderContinue(entries);
     if (!entries.length) {
       this.grid.replaceChildren(h('div', { class: 'empty', style: 'grid-column:1/-1' },
         h('p', null, '书架是空的。'), h('p', null, '点右上角“导入”，或把 EPUB / MOBI / AZW3 / TXT / Markdown / HTML / PDF 文件拖到这个页面。'),
+        h('p', null, this.onlineButton('primary')),
         h('p', { class: 'hint', text: '也可以在设置里连接 WebDAV，与桌面版 PyReader 共享书库和阅读进度。' })));
       return;
     }
@@ -214,8 +245,18 @@ export class ShelfView {
   }
 
   async openEntry(e) {
-    if (!e.cloud) { this.ctx.open(e.id); return; }
+    if (!e.cloud) { this.openLocal(e); return; }
     await this.downloadAndOpen(e);
+  }
+
+  /** an image-only book (comic epub) is offered to ImageViewer first; nothing is pushed to the history until the reader is chosen */
+  openLocal(e) {
+    if (!e.comic) { this.ctx.open(e.id); return; }
+    comicPrompt({
+      title: e.title, rel: e.rel, ppd: e.ppd, bid: e.id,
+      onUpload: !e.rel && syncMgr.enabled() && e.source === 'local' ? () => this.uploadDialog(e) : null,
+      onAnyway: () => this.ctx.open(e.id, { anyway: true }),
+    });
   }
 
   async downloadAndOpen(e, { open = true } = {}) {
@@ -231,7 +272,7 @@ export class ShelfView {
       const { meta } = await importBlob(file, { name: baseName(e.rel), remote: { rel: e.rel, size: e.size, mtime: e.mtime || 0 }, onStatus: (m) => { label.textContent = m; } });
       t.remove();
       await this.render();
-      if (open) this.ctx.open(meta.id);
+      if (open) this.openLocal({ id: meta.id, title: meta.title, rel: meta.rel, ppd: meta.ppd || null, comic: !!meta.comic, source: meta.source, format: meta.format });
     } catch (err) {
       t.remove();
       toast(`下载失败：${err && err.message ? err.message : err}`, { ms: 6000 });

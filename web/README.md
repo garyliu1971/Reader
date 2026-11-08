@@ -138,3 +138,10 @@ web/
 ## 已知限制
 
 见仓库根的汇报；要点：PDF 无文字层/搜索/书签文本；无 MOBI/DOCX/PPTX/音频/漫画；封面生成色块；网页端不写 `meta` 所以桌面版不会把网页端的本地书与它自己的本地书按指纹合并；只有主书库（`library/`），不支持桌面版的“额外书库源”；浏览器存储配额受限，可申请持久存储。
+
+## 在线朗读（可选，默认关闭）
+
+* 书架 → 设置 → 在线朗读：开启时需同意“书中文字（逐句）会发送到服务器并转发给 Azure / edge-tts”；令牌（静态 Bearer）只保存在本设备 IndexedDB（键 `tts.cloud`）。默认仍用浏览器自带语音。
+* 接口（与 `/reader/` 同源，路径 `../tts/v1/`）：`POST speak`（`{text<=200, voice, rate}` → `audio/mpeg`；401 令牌错误、413 过长、429 `{error,retryAfter}` 额度用尽、502 上游失败）、`GET voices`、`GET usage`。
+* 播放：单个 `<audio>`（由点“朗读”的手势解锁），向前预取 3 句，语速用 `playbackRate`；额度用尽/断网/无法自动播放时自动回退浏览器语音并提示。SW 不处理 `/tts/`。
+* 测试：`node --test web/test`（含 stub 服务器契约测试）；`web/tools/browser-smoke/cloudtts.mjs` 用本地 stub 做真实浏览器冒烟。

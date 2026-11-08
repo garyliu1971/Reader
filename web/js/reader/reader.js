@@ -4,13 +4,22 @@ import { h, openPanel, toast, debounce } from '../ui/dom.js';
 import { icon } from '../ui/icons.js';
 import { Paginator } from './paginator.js';
 import { TtsReader, pickVoice } from './tts.js';
+import { CloudEngine, CloudApi } from './cloudengine.js';
+import { getCloudCfg, loadCloudCfg, saveCloudCfg, onCloudCfgChange } from '../store/cloudcfg.js';
+import { GROUP_LABEL, cloudActive, cloudOptions, selectedValue, applyChoice, statusText, tokenIncomplete, HINT_INCOMPLETE } from '../core/ttsux.js';
 import { Translate } from './translate.js';
 import { FindBar } from './find.js';
 import { kvGet, kvSet } from '../store/db.js';
 import { openStored, touchRead, getProgress, saveProgress, getBookmarks, addBookmark, deleteBookmark } from '../library.js';
 import { positionToPercent, percentToPosition, makeAnchor, resolveOffset } from '../core/anchor.js';
 import { stampNow } from '../core/progress.js';
+import { aliasIds, localBookId } from '../core/bookid.js';
+import { normalizeSelection } from '../parse/pdftext.js';
+import { ivUrl } from '../core/handoff.js';
+import { comicPrompt } from '../ui/comic.js';
 import { DWELL_MS } from '../core/recent.js';
+import { navDir } from '../core/search.js';
+import { makeTimer, isDue, timerLabel, activeChoice, SLEEP_MINUTES } from '../core/sleeptimer.js';
 import { loadSettings, saveSettings, normalize, applyTheme, applyTypography, LIMITS } from '../store/settings.js';
 
 const TAP_ZONE = 0.3;
@@ -27,7 +36,7 @@ const isDarkNow = () => {
 export class ReaderView {
   /**
    * @param root container element
-   * @param ctx {goShelf(), onProgress(info), fetchRemoteProgress(bid), now()}
+   * @param ctx {goShelf(), readAnyway(id), onProgress(info), fetchRemoteProgress(bid), now()}
    */
   constructor(root, ctx) {
     this.root = root;
@@ -78,12 +87,16 @@ export class ReaderView {
     this.ttsState = h('span', { class: 'state', 'aria-live': 'polite' }, '朗读中');
     this.ttsPlay = h('button', { class: 'icon-btn', type: 'button', 'aria-label': '暂停朗读', onclick: () => this.ttsPauseResume() }, icon('pause'));
     this.ttsRateEl = h('span', { class: 'rate' }, '1.0x');
+    this.sleep = null;       // sleep timer (core/sleeptimer.js); only lives while reading aloud
+    this.sleepTick = 0;
+    this.ttsSleep = h('button', { class: 'sleep-btn', type: 'button', 'aria-label': '睡眠定时', onclick: () => this.openSleepMenu() }, '定时');
     this.ttsBar = h('div', { class: 'tts-bar', role: 'toolbar', 'aria-label': '朗读控制' },
       this.ttsState,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '减慢语速', onclick: () => this.ttsStep(-0.1) }, '−'),
       this.ttsRateEl,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '加快语速', onclick: () => this.ttsStep(0.1) }, '+'),
       this.ttsPlay,
+      this.ttsSleep,
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': '停止朗读', onclick: () => this.tts && this.tts.stop() }, icon('stop')));
     this.loading = h('div', { class: 'loading', role: 'status' }, '正在打开…');
     this.contentS = -1;   // section whose text is laid out in the paginator (this.s is already the new one while it loads)
@@ -119,18 +132,24 @@ export class ReaderView {
     r.append(this.trBtn, this.trPop);
     this._ttsMoving = 0;
     this.tts = null;
-    if (TtsReader.supported()) {
+    // online voice engine: opt-in per device (settings), needs <audio>; the browser engine stays the default
+    let cloud = null;
+    if (typeof globalThis.Audio === 'function' && typeof globalThis.fetch === 'function') {
+      cloud = new CloudEngine({ audio: new Audio(), api: new CloudApi({ fetchFn: (...a) => fetch(...a), getCfg: getCloudCfg, baseHref: location.href }) });
+    }
+    if (TtsReader.supported() || cloud) {
       this.tts = new TtsReader({
-        synth: globalThis.speechSynthesis, Utter: globalThis.SpeechSynthesisUtterance,
+        synth: globalThis.speechSynthesis, Utter: globalThis.SpeechSynthesisUtterance, cloud,
         host: {
           text: () => this.pg.fullText(),
           breaks: () => this.pg.breaks,
           reveal: (a, b) => this.ttsReveal(a, b),
           nextSection: () => this.ttsNextSection(),
           changed: (st) => this.ttsChanged(st),
-          finished: () => toast('朗读完毕', { ms: 1800 }),
+          finished: () => { if (!this.sleepFired) toast('朗读完毕', { ms: 1800 }); this.sleepFired = false; },
           failed: (m) => { if (m) toast(m, { ms: 6000 }); },
-          settings: () => this.settings || {},
+          notice: (m) => { if (m) toast(m, { ms: 7000 }); },
+          settings: () => ({ ...(this.settings || {}), cloud: getCloudCfg() }),
         },
       });
     } else this.btnTts.hidden = true;
@@ -234,6 +253,8 @@ export class ReaderView {
       }
       const overlay = document.querySelector('.overlay-root:not(.side-sheet)');
       if (mod && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F') && !overlay && this.book && !this.pdf) { e.preventDefault(); this.openSearch(); return; }   // a PDF has no text: leave the browser's own find alone
+      const nav = !overlay && this.find.isOpen ? navDir(e) : 0;   // F3 / Ctrl+G: next hit, Shift = previous
+      if (nav) { e.preventDefault(); this.find.step(nav); return; }
       if (overlay || mod || e.altKey) return;
       switch (e.key) {
         case 'ArrowRight': case 'ArrowDown': case 'PageDown': this.next(); break;
@@ -242,7 +263,6 @@ export class ReaderView {
         case 'Home': this.seekPercent(0); break;
         case 'End': this.seekPercent(100); break;
         case 'Escape': if (!this.trPop.hidden || !this.trBtn.hidden) this.hideTr(); else if (this.find.isOpen) this.find.close(); else if (this.barsOn()) this.setBars(false); else this.ctx.goShelf(); break;
-        case 'F3': if (this.find.isOpen) this.find.step(e.shiftKey ? -1 : 1); else return; break;
         case 't': case 'T': this.openToc('toc'); break;
         case 'b': case 'B': this.toggleBookmark(); break;
         case '/': e.preventDefault(); this.openSearch(); break;
@@ -270,7 +290,8 @@ export class ReaderView {
   setBars(on) { this.root.classList.toggle('bars-on', on); }
 
   // ------------------------------------------------------------------ opening
-  async open(id) {
+  /** @param opts.anyway read an image-only book (comic epub) here: the shelf's choice panel was answered with 仍在此阅读 */
+  async open(id, { anyway = false } = {}) {
     const seq = ++this.seq;
     this.active = true;
     this.loading.hidden = false;
@@ -279,9 +300,11 @@ export class ReaderView {
     this.closeBook();
     try {
       this.settings = await loadSettings();
+      await loadCloudCfg();
       this.applySettings(false);
       const { meta, book } = await openStored(id);
       if (seq !== this.seq) { book.close(); return; }
+      if (meta.comic && !anyway) { book.close(); this.offerComic(meta); return; }
       this.meta = meta;
       this.book = book;
       this.pdf = book.format === 'pdf';
@@ -314,6 +337,7 @@ export class ReaderView {
       this.loading.hidden = true;
       this.pg.mode === 'paged' && this.frame.focus({ preventScroll: true });
       this.armDwell(meta.id);
+      if (meta.comic) this.showComicNote(meta);
       this.checkRemote(saved);
       this.refreshMarkButton();
       this.maybeShowHint();
@@ -323,6 +347,34 @@ export class ReaderView {
       this.loading.append(h('div', { class: 'row', style: 'margin-left:12px' }, h('button', { class: 'btn', type: 'button', onclick: () => this.ctx.goShelf() }, '返回书架')));
     }
   }
+
+  /**
+   * An image-only book reached the reader without the shelf's choice (deep link, old history entry, first open of a row
+   * saved before detection): same choice panel. The history entry is replaced FIRST, so Back never returns to a
+   * #/read/ entry that would open this panel again.
+   */
+  offerComic(meta) {
+    history.replaceState(null, '', '#/');
+    this.titleEl.textContent = meta.title;
+    this.loading.hidden = false;
+    this.loading.textContent = meta.title;
+    this.choice = comicPrompt({
+      title: meta.title, rel: meta.rel, ppd: meta.ppd || null, bid: meta.id,
+      onAnyway: () => this.ctx.readAnyway(meta.id),
+      onCancel: () => this.ctx.goShelf(),
+    });
+  }
+
+  showComicNote(meta) {
+    const url = meta.rel ? ivUrl(meta.rel, { ppd: meta.ppd || null, bid: meta.id }) : '';
+    this.comicNote = h('div', { class: 'banner comic-note', role: 'status' },
+      h('span', null, '图片型漫画：这里只能逐页阅读。'),
+      url && h('a', { class: 'btn small primary', href: url, target: '_blank', rel: 'noopener' }, '在 ImageViewer 打开'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => this.hideComicNote() }, '知道了'));
+    this.root.append(this.comicNote);
+  }
+
+  hideComicNote() { if (this.comicNote) { this.comicNote.remove(); this.comicNote = null; } }
 
   /** Opening alone is not reading: the book only becomes "continue reading" once progress moves or it stays open (and visible) for DWELL_MS */
   armDwell(id) {
@@ -335,6 +387,8 @@ export class ReaderView {
 
   closeBook() {
     clearTimeout(this._dwellT);
+    this.hideComicNote();
+    if (this.choice) { this.choice.dismiss(); this.choice = null; }
     this.hideTr();
     this.find.reset();
     this.contentS = -1;
@@ -342,7 +396,7 @@ export class ReaderView {
     if (this.book) { try { this.book.close(); } catch { /* ignore */ } }
     this.book = null;
     this.content.replaceChildren();
-    if (this.pdfCanvas) { this.pdfCanvas.remove(); this.pdfCanvas = null; }
+    if (this.pdfWrap) { this.pdfWrap.remove(); this.pdfWrap = null; this.pdfCanvas = null; this.pdfText = null; }
   }
 
   close() {
@@ -378,14 +432,14 @@ export class ReaderView {
 
   // ------------------------------------------------------------------ translate selection (Translator API)
   onSelection() {
-    if (!this.tr || !this.active || this.pdf || !this.book) { this.hideTr(); return; }
+    if (!this.tr || !this.active || !this.book) { this.hideTr(); return; }
     if (this._ptrDown) return;
     const sel = globalThis.getSelection && getSelection();
     if (!sel || !sel.rangeCount) { this.hideTr(); return; }
     const range = sel.getRangeAt(0);
     if (this.trPop.contains(range.commonAncestorContainer)) return;   // selecting inside the translation itself
-    const text = sel.toString();
-    if (sel.isCollapsed || !text.trim() || !this.content.contains(range.commonAncestorContainer)) { this.hideTr(); return; }
+    const text = this.pdf ? normalizeSelection(sel.toString()) : sel.toString();
+    if (sel.isCollapsed || !text.trim() || !(this.pdf ? this.pdfText : this.content).contains(range.commonAncestorContainer)) { this.hideTr(); return; }
     const rects = range.getClientRects();
     const last = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
     const first = rects.length ? rects[0] : last;
@@ -482,6 +536,7 @@ export class ReaderView {
   }
 
   ttsChanged(st) {
+    this.mediaSession(st);
     this.root.classList.toggle('tts-on', st !== 'idle');
     this.btnTts.setAttribute('aria-pressed', String(st !== 'idle'));
     this.ttsState.textContent = st === 'paused' ? '已暂停' : '朗读中';
@@ -489,6 +544,61 @@ export class ReaderView {
     this.ttsPlay.setAttribute('aria-label', st === 'paused' ? '继续朗读' : '暂停朗读');
     if (this.settings) this.ttsRateEl.textContent = this.settings.ttsRate.toFixed(1) + 'x';
     if (st === 'idle' && globalThis.CSS && CSS.highlights) CSS.highlights.delete('tts');
+    if (st === 'idle') this.setSleep(null);
+  }
+
+  /** lock-screen / headset controls while reading (helps the OS treat cloud playback as media) */
+  mediaSession(st) {
+    const ms = globalThis.navigator && navigator.mediaSession;
+    if (!ms) return;
+    try {
+      if (st === 'idle') { ms.playbackState = 'none'; return; }
+      ms.playbackState = st === 'paused' ? 'paused' : 'playing';
+      if (!this._msBound) {
+        this._msBound = true;
+        if (globalThis.MediaMetadata) ms.metadata = new MediaMetadata({ title: (this.meta && this.meta.title) || 'PyReader', artist: 'PyReader' });
+        ms.setActionHandler('play', () => this.tts && this.tts.resume());
+        ms.setActionHandler('pause', () => this.tts && this.tts.pause());
+        ms.setActionHandler('stop', () => this.tts && this.tts.stop());
+      }
+    } catch { /* unsupported action */ }
+  }
+
+  // ------------------------------------------------------------------ sleep timer
+  /** arm (or with null, cancel) the timer; the countdown is polled against the clock so a throttled background tab still stops on time */
+  setSleep(t) {
+    clearInterval(this.sleepTick);
+    this.sleepTick = 0;
+    this.sleep = t;
+    this.ttsSleep.classList.toggle('on', !!t);
+    this.ttsSleep.textContent = timerLabel(t, Date.now());
+    this.ttsSleep.setAttribute('aria-label', t ? `睡眠定时：${this.ttsSleep.textContent}，点按更改或取消` : '睡眠定时');
+    if (t && t.kind === 'time') this.sleepTick = setInterval(() => this.sleepCheck(), 500);
+  }
+
+  sleepCheck() {
+    if (!this.sleep) return;
+    if (isDue(this.sleep, Date.now())) this.sleepStop();
+    else this.ttsSleep.textContent = timerLabel(this.sleep, Date.now());
+  }
+
+  sleepStop() {
+    if (this.tts) this.tts.stop();   // goes idle -> clears the timer
+    toast('睡眠定时已到，已停止朗读', { ms: 3000 });
+  }
+
+  openSleepMenu() {
+    if (!this.tts || this.tts.state === 'idle') return;
+    const on = activeChoice(this.sleep);
+    const pick = (choice) => { p.close(); this.setSleep(makeTimer(choice, Date.now())); };
+    const item = (label, choice) => h('li', { 'aria-current': on === choice ? 'true' : null }, h('button', { type: 'button', onclick: () => pick(choice) }, label));
+    const p = openPanel({
+      title: '睡眠定时', side: 'dialog', label: '睡眠定时',
+      content: h('ul', { class: 'list' },
+        ...SLEEP_MINUTES.map((m) => item(`${m} 分钟后停止`, m)),
+        item('读完本章后停止', 'chapter'),
+        ...(this.sleep ? [h('li', null, h('button', { type: 'button', class: 'danger', onclick: () => { p.close(); this.setSleep(null); } }, '取消定时'))] : [])),
+    });
   }
 
   /** called before each sentence is spoken: bring it into view (turning the page if needed) and highlight it */
@@ -503,6 +613,12 @@ export class ReaderView {
   }
 
   async ttsNextSection() {
+    if (this.sleep && this.sleep.kind === 'chapter') {   // chapter read to its end: stop here instead of rolling on (the tts loop then goes idle)
+      this.sleepFired = true;
+      this.setSleep(null);
+      toast('睡眠定时已到，已停止朗读', { ms: 3000 });
+      return false;
+    }
     if (!this.book || this.s >= this.book.sections.length - 1) return false;
     this._ttsMoving++;
     try { await this.showSection(this.s + 1, { start: true }); } finally { this._ttsMoving--; }
@@ -553,17 +669,39 @@ export class ReaderView {
     const ttsBlock = [];
     if (this.tts) {
       const synth = globalThis.speechSynthesis;
-      const sel = h('select', { 'aria-label': '朗读音色', onchange: () => this.setSetting('ttsVoice', sel.value) });
+      const status = h('p', { class: 'hint', role: 'status', dataset: { ttsStatus: '1' } });
+      const sel = h('select', { 'aria-label': '朗读音色', onchange: () => choose(sel.value) });
+      const refreshStatus = () => { status.textContent = statusText(getCloudCfg()); status.classList.toggle('warn', tokenIncomplete(getCloudCfg())); };
       const fill = () => {
-        const vs = (synth.getVoices() || []).slice().sort((a, b) => (Number(b.lang.startsWith('zh')) - Number(a.lang.startsWith('zh'))) || a.name.localeCompare(b.name));
-        sel.replaceChildren(h('option', { value: '', text: '自动（优先中文自然音色）' }), ...vs.map((v) => h('option', { value: v.voiceURI, text: `${v.name} (${v.lang})` })));
-        sel.value = s().ttsVoice;
+        const vs = (synth ? (synth.getVoices() || []) : []).slice().sort((a, b) => (Number(b.lang.startsWith('zh')) - Number(a.lang.startsWith('zh'))) || a.name.localeCompare(b.name));
+        const online = cloudOptions(getCloudCfg());
+        sel.replaceChildren(h('option', { value: '', text: '自动（优先中文自然音色）' }), ...vs.map((v) => h('option', { value: v.voiceURI, text: `${v.name} (${v.lang})` })),
+          ...(online.length ? [h('optgroup', { label: GROUP_LABEL }, ...online.map((o) => h('option', { value: o.value, text: o.label })))] : []));
+        sel.value = selectedValue(getCloudCfg(), s().ttsVoice);
+        refreshStatus();
+      };
+      const choose = async (value) => {
+        const r = applyChoice(value, getCloudCfg());
+        if (r.hint) { toast(r.hint, { ms: 3000 }); fill(); return; }
+        if (r.ttsVoice !== undefined) this.setSetting('ttsVoice', r.ttsVoice);
+        if (r.cloudPatch) await saveCloudCfg(r.cloudPatch);   // notifies -> fill()
+        else fill();
       };
       fill();
-      synth.addEventListener('voiceschanged', fill);
-      offVoices = () => synth.removeEventListener('voiceschanged', fill);
+      if (synth) synth.addEventListener('voiceschanged', fill);
+      const offCfg = onCloudCfgChange(fill);   // settings saved elsewhere take effect without reopening the reader
+      offVoices = () => { if (synth) synth.removeEventListener('voiceschanged', fill); offCfg(); };
       const sample = () => {
         if (this.tts.state !== 'idle') { toast('正在朗读，先停止后再试听', { ms: 1500 }); return; }
+        const cfg = getCloudCfg();
+        if (cloudActive(cfg) && this.tts.cloud) {
+          const eng = this.tts.cloud;
+          eng.prime();   // inside the tap, so the browser lets <audio> play
+          eng.speak('这是朗读示例：天地玄黄，宇宙洪荒。', () => true, { cloud: cfg, ttsRate: s().ttsRate })
+            .then((r) => { if (r !== 'end' && r !== 'cancel') toast(eng.lastError ? eng.lastError.message : '在线试听失败', { ms: 3000 }); });
+          return;
+        }
+        if (!synth) { toast(tokenIncomplete(cfg) ? HINT_INCOMPLETE : '此浏览器不支持朗读', { ms: 2500 }); return; }
         const u = new SpeechSynthesisUtterance('这是朗读示例：天地玄黄，宇宙洪荒。');
         const v = pickVoice(synth.getVoices(), 'zh-CN', s().ttsVoice);
         u.lang = v ? v.lang : 'zh-CN';
@@ -573,7 +711,7 @@ export class ReaderView {
         synth.speak(u);
       };
       ttsBlock.push(h('label', { class: 'field' }, h('span', null, '朗读音色'), sel), rate.el,
-        h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: sample }, '试听')),
+        status, h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onclick: sample }, '试听')),
         h('p', { class: 'hint', text: '朗读用浏览器自带的语音：Edge 带“Natural”的在线中文音色效果最好（需联网）；手机锁屏后系统可能暂停朗读。快捷键 R 开始/停止。' }));
     }
     const trSeg = seg([['zh', '中文'], ['en', 'English']], 'trTarget');
@@ -661,7 +799,7 @@ export class ReaderView {
   async seekPercent(p) {
     if (!this.book) return;
     if (this.pdf) { await this.setPdfPage(Math.min(this.book.pageCount - 1, Math.max(0, Math.round((p / 100) * this.book.pageCount - 0.5))), true); return; }
-    const { s, f } = percentToPosition(this.book.lens, p);
+    const { s, f } = percentToPosition(this.book.lens, p, { comic: !!this.meta.comic });
     if (s !== this.s) await this.showSection(s, { fraction: f });
     else this.pg.gotoOffset(this.pg.skipBlank(Math.round(f * this.pg.total)));
     this.markDirty();
@@ -724,7 +862,7 @@ export class ReaderView {
     const last = this.s === this.book.sections.length - 1;
     const atEnd = pg.mode === 'paged' ? pg.page + pg.cols >= pg.pageCount : pg.frame.scrollTop + pg.frame.clientHeight >= pg.frame.scrollHeight - 2;
     const frac = last && atEnd ? 1 : pg.total ? pg.currentOffset() / pg.total : 0;
-    return positionToPercent(this.book.lens, this.s, frac);
+    return positionToPercent(this.book.lens, this.s, frac, { comic: !!this.meta.comic });
   }
 
   anchor() {
@@ -776,12 +914,12 @@ export class ReaderView {
     const rec = { bid: this.meta.id, anchor: this.anchor(), percent: Math.round(pct * 1000) / 1000, updated: stampNow(this.ctx.now(), this.ctx.skewMs ? this.ctx.skewMs() : 0), chapter: this.sectionTitle() };
     this.lastSaved = rec;
     try { await saveProgress(rec); } catch (e) { console.warn('[progress] save failed', e); }
-    this.ctx.onProgress({ bid: rec.bid, percent: rec.percent, chapter: rec.chapter, updated: rec.updated });
+    this.ctx.onProgress({ bid: rec.bid, aliases: aliasIds(this.meta), percent: rec.percent, chapter: rec.chapter, updated: rec.updated });
   }
 
   async checkRemote(saved) {
     try {
-      const remote = await this.ctx.fetchRemoteProgress(this.meta.id);
+      const remote = await this.ctx.fetchRemoteProgress(this.meta.id, aliasIds(this.meta));
       if (!remote || !this.active || !this.meta) return;
       const localTs = saved ? saved.updated : 0;
       if (remote.updated <= localTs || Math.abs(remote.percent - this.percent()) < 0.5) return;
@@ -899,7 +1037,9 @@ export class ReaderView {
   async openPdfAt(page) {
     this.pdfPage = Math.max(0, Math.min(this.book.pageCount - 1, page || 0));
     this.pdfCanvas = h('canvas', { 'aria-label': 'PDF 页面', role: 'img' });
-    this.frame.append(this.pdfCanvas);
+    this.pdfText = h('div', { class: 'pdf-text' });   // invisible selectable text over the canvas
+    this.pdfWrap = h('div', { class: 'pdf-page' }, this.pdfCanvas, this.pdfText);
+    this.frame.append(this.pdfWrap);
     this.frame.classList.remove('scroll');
     await this.renderPdf();
     this.updateUi();
@@ -911,7 +1051,7 @@ export class ReaderView {
     if (!this.pdf || !this.pdfCanvas) return;
     this.pdfCanvas.classList.toggle('invert', isDarkNow());
     const w = this.frame.clientWidth - 8, hgt = this.frame.clientHeight - 8;
-    try { await this.book.render(this.pdfPage, this.pdfCanvas, Math.max(50, w), Math.max(50, hgt)); } catch (e) { toast('渲染失败：' + e.message); }
+    try { await this.book.render(this.pdfPage, this.pdfCanvas, Math.max(50, w), Math.max(50, hgt), this.pdfText); } catch (e) { toast('渲染失败：' + e.message); }
   }
   async setPdfPage(p, user) {
     this.pdfPage = p;

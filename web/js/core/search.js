@@ -106,3 +106,15 @@ export function snippet(text, o, len, before = 18, after = 28) {
   const flat = (t) => t.replace(/\s+/g, ' ');
   return { lead: a > 0, before: flat(text.slice(a, o)), hit: text.slice(o, o + len), after: flat(text.slice(o + len, o + len + after)) };
 }
+
+/**
+ * Keyboard shortcut -> step direction for "next / previous hit": F3 or Ctrl/Cmd+G (+Shift = previous). 0 = not a nav key.
+ * Enter is handled by the search input itself (it also has to start a new search).
+ */
+export function navDir(e) {
+  const k = e.key;
+  if (e.altKey) return 0;
+  if (k === 'F3' && !e.ctrlKey && !e.metaKey) return e.shiftKey ? -1 : 1;
+  if ((e.ctrlKey || e.metaKey) && (k === 'g' || k === 'G')) return e.shiftKey ? -1 : 1;
+  return 0;
+}

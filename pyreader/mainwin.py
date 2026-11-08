@@ -19,6 +19,7 @@ from .config import (view_count, view_of_page, first_page_of_view, CONFIG_PATH, 
                      FLIP_EFFECTS, DEFAULT_FLIP_EFFECT, set_net_proxy)
 from .ttsplayer import TtsPlayer
 from .comicview import ComicView
+from . import comic as comicmod
 from . import mediautil as mu
 if _HAS_MULTIMEDIA:
     from .audioplayer import AudioPlayerView, audio_available
@@ -351,7 +352,10 @@ class MainWindow(QMainWindow):
         self.library_act.setMenu(self.library_menu)
         self.library_act.setToolTip("最近打开 / 本地书库目录 / 上传到远程书库")
         # 在线书源（OPDS）：独立对话框，见 booksourcedlg.py
-        tip(tb.addAction("📡", self.open_book_sources), "在线书源（OPDS / Gutenberg）：浏览、搜索、下载")
+        # 带文字：单个 emoji 在工具栏里不显眼；Ctrl+Shift+B 也可打开
+        self.booksrc_act = tb.addAction("📡 在线书库", self.open_book_sources)
+        self.booksrc_act.setToolTip("在线书库（Project Gutenberg / OPDS）：搜索并下载免费电子书  (Ctrl+Shift+B)")
+        self.booksrc_act.setShortcut("Ctrl+Shift+B")
         # ---- AI 辅助功能组 ----
         ai_menu = QMenu("AI 功能", self)
         ai_menu.addAction("📝 章节摘要", self._ai_summarize)
@@ -469,7 +473,7 @@ class MainWindow(QMainWindow):
             self.shelf.launch_file(path)
             return
         self.load_book(path)
-        self._shelf_open_pending = not shelfmod.is_inapp_media(path)     # 媒体同步打开，失败时 _open_media 自己兜底
+        self._shelf_open_pending = not (shelfmod.is_inapp_media(path) or comicmod.is_image_epub(path))     # 媒体（含图片型 epub）同步打开，失败时 _open_media 自己兜底
 
     # ---- 应用内媒体（音频 / 漫画）：打开、进度、离开 ----
     MEDIA_SAVE_S = 5.0        # 本地进度（bookmarks.json / 书架）至多每 5 秒存一次；暂停 / 离开页面 / 退出时立即存
@@ -487,7 +491,7 @@ class MainWindow(QMainWindow):
         return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
 
     def _open_media(self, path, kind):
-        """音频 / .zip / .cbz 在应用内打开：停朗读、存文字书进度、放开上一个媒体，再切到对应页并从断点继续。
+        """音频 / .zip / .cbz / 图片型 epub 在应用内打开：停朗读、存文字书进度、放开上一个媒体，再切到对应页并从断点继续。
         打不开（没有音频设备 / 没有 QtMultimedia / 不是漫画的 .zip）时退回系统默认应用，行为同旧版。"""
         self._tts_stop()
         self._save_progress(force=False)
@@ -510,6 +514,8 @@ class MainWindow(QMainWindow):
             self._apply_comic_options()
             ok = self.comic.open_comic(path, start)
             err = self.comic.last_error()
+            if ok:
+                self._apply_comic_rtl(ent)
         if not ok:
             self.statusBar().showMessage(f"无法在应用内打开 {os.path.basename(path)}（{err}），改用系统应用", 8000)
             if os.path.isfile(path):
@@ -519,7 +525,7 @@ class MainWindow(QMainWindow):
             return
         self.shelf.note_opened(path)
         self._media = {"path": path, "kind": kind, "bid": syncmod.book_id(path), "start": start, "pos": start, "dur": 0,
-                       "page": start, "count": self.comic.page_count() if kind == "comic" else 0,
+                       "page": start, "count": self.comic.page_count() if kind == "comic" else 0, "rtl": self.comic.rtl(),
                        "saved_at": None, "pushed_at": None, "dirty": False, "push_due": False,
                        "closing": False, "touched": False, "applying": False, "autoplay": False}
         self._text_active = False
@@ -541,16 +547,34 @@ class MainWindow(QMainWindow):
                 self.comic.set_fit_mode(self.cfg["comic_fit"])
             if "comic_spread" in self.cfg:
                 self.comic.set_spread(bool(self.cfg["comic_spread"]))
-            if "comic_rtl" in self.cfg:
-                self.comic.set_rtl(bool(self.cfg["comic_rtl"]))
+        finally:
+            self._applying_opts = False
+
+    def _apply_comic_rtl(self, ent):
+        """阅读方向按书记：这本书记过的 > OPF 声明的（epub 的 page-progression-direction）> 全局 comic_rtl 设置。
+        必须每本都明确设一次：ComicView 在书之间复用，不能把上一本的方向带过来。"""
+        per_book = ent.get("_comic_rtl")
+        opf = self.comic.opf_rtl()
+        rtl = per_book if isinstance(per_book, bool) else opf if opf is not None else bool(self.cfg.get("comic_rtl", False))
+        self._applying_opts = True
+        try:
+            self.comic.set_rtl(rtl)
         finally:
             self._applying_opts = False
 
     def _save_comic_options(self):
         if getattr(self, "_applying_opts", False):
             return
-        self.cfg.update({"comic_fit": self.comic.fit_mode(), "comic_spread": self.comic.spread(), "comic_rtl": self.comic.rtl()})
+        self.cfg.update({"comic_fit": self.comic.fit_mode(), "comic_spread": self.comic.spread()})
         save_json(CONFIG_PATH, self.cfg)
+        m = self._media
+        if m is not None and m["kind"] == "comic" and m["rtl"] != self.comic.rtl():       # 方向只记在这本书上，不动全局设置
+            m["rtl"] = self.comic.rtl()
+            self.bookmarks.setdefault(m["path"], {})["_comic_rtl"] = m["rtl"]
+            try:
+                save_json(BOOKMARKS_PATH, self.bookmarks)
+            except Exception:
+                pass
 
     def _on_audio_position(self, pos, dur):
         m = self._media
@@ -914,8 +938,8 @@ class MainWindow(QMainWindow):
             self.load_book(path)
 
     def load_book(self, path):
-        kind = shelfmod.inapp_kind(path)
-        if kind:                             # 音频 / .zip / .cbz：应用内播放器 / 漫画页，不进 loader
+        kind = shelfmod.inapp_kind(path) or ("comic" if comicmod.is_image_epub(path) else "")    # 图片型 epub 当漫画：必须在碰文字书路径（缓存 / loader）之前分流
+        if kind:                             # 音频 / .zip / .cbz / 图片型 epub：应用内播放器 / 漫画页，不进 loader
             self._open_media(path, kind)
             return
         if shelfmod.is_external(path):       # .cbr / .rar / .7z：没有内置解码器，必须在切页、记进度、起 loader 之前拦下
@@ -960,8 +984,17 @@ class MainWindow(QMainWindow):
 
     def _on_load_failed(self, msg):
         self.load_bar.hide()
+        if msg == comicmod.IMAGE_EPUB_MESSAGE and self.book_path and self._media is None:
+            self._open_image_epub_as_comic(self.book_path)       # 不是失败：load_book 的预判没拦住的图片型 epub，改用漫画阅读器
+            return
         QMessageBox.critical(self, "错误", msg)
         if self._shelf_open_pending:         # 从书架打开却失败：回书架，而不是停在空白阅读页
+            self._shelf_open_pending = False
+            self.show_shelf()
+
+    def _open_image_epub_as_comic(self, path):
+        self._open_media(path, "comic")      # 打不开时 _open_media 退回系统应用；这时阅读页还停在没加载出内容的状态，回书架
+        if self._media is None:
             self._shelf_open_pending = False
             self.show_shelf()
 

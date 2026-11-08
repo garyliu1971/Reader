@@ -6,6 +6,7 @@ import { openEpub } from './parse/epub.js';
 import { parseTxtAsync, txtBook, richTextBook } from './parse/textbooks.js';
 import { openPdf } from './parse/pdf.js';
 import { openMobi } from './parse/mobi.js';
+import { detectComic } from './core/comic.js';
 
 export const FORMATS = { '.txt': 'txt', '.md': 'md', '.markdown': 'md', '.epub': 'epub', '.mobi': 'mobi', '.azw': 'mobi', '.azw3': 'mobi', '.prc': 'mobi', '.pdf': 'pdf', '.html': 'html', '.htm': 'html' };
 export const ACCEPT = Object.keys(FORMATS).join(',');
@@ -30,6 +31,9 @@ async function makeThumb(blob, maxW = 240) {
   }
 }
 
+/** meta fields of an image-only book: comic (bool, the core/comic.js verdict) and ppd (OPF page-progression-direction) */
+const comicMeta = (book) => ({ comic: book.format === 'epub' && detectComic(book.docStats, book.bookType).comic, ppd: book.ppd || null });
+
 export async function getBook(id) { return db.get('books', id); }
 export async function allBooks() { return db.getAll('books'); }
 
@@ -37,20 +41,24 @@ export async function allBooks() { return db.getAll('books'); }
  * Import a File/Blob. `remote` = {rel, size, mtime} when it was downloaded from the WebDAV library (id = remote:<rel>).
  * @returns {{meta, duplicate: boolean}}
  */
-export async function importBlob(file, { name = file.name, remote = null, onStatus = () => {} } = {}) {
+export async function importBlob(file, { name = file.name, remote = null, origin = null, onStatus = () => {} } = {}) {
   const format = formatOf(name);
   if (!format) throw new Error(`暂不支持 ${extOf(name) || '该'} 格式（支持 EPUB、MOBI/AZW3、TXT、Markdown、HTML、PDF）`);
   if (file.size > MAX_IMPORT_BYTES) throw new Error(`文件过大（${Math.round(file.size / 1048576)} MB，上限 ${MAX_IMPORT_BYTES / 1048576} MB）`);
   if (file.size === 0) throw new Error('文件是空的');
   const id = remote ? remoteBookId(remote.rel) : localBookId(name, file.size);
   const existing = await db.get('books', id);
-  if (existing && (await db.get('files', id))) return { meta: existing, duplicate: true };
+  if (existing && (await db.get('files', id))) {
+    if (origin && !existing.origin) { existing.origin = origin; await db.put('books', existing); }   // same file already on the shelf: just tag where it came from
+    return { meta: existing, duplicate: true };
+  }
 
   const meta = {
     id, name, format, size: file.size, title: stem(name), author: '', addedAt: Date.now(), readAt: 0, percent: 0,
     lens: [], headings: null, pageCount: 0, source: remote ? 'remote' : 'local', rel: remote ? remote.rel : null,
     remoteSize: remote ? remote.size : 0, remoteMtime: remote ? remote.mtime : 0,
   };
+  if (origin) meta.origin = origin;   // e.g. "gutenberg:84" (online library); the shelf shows 已添加 for it
   let coverBlob = null;
   onStatus(`解析 ${name}…`);
   if (format === 'epub' || format === 'mobi') {
@@ -60,6 +68,7 @@ export async function importBlob(file, { name = file.name, remote = null, onStat
     } catch (e) { book.close(); throw e; }
     meta.lens = book.lens;
     Object.assign(meta, book.layoutData());   // docLens, headings, parts (mobi: + keep, tocRaw): lets us open without rescanning
+    Object.assign(meta, comicMeta(book));
     if (book.title) meta.title = book.title;
     meta.author = book.author;
     try { const c = await book.cover(); if (c) coverBlob = await makeThumb(c); } catch { /* generated tile instead */ }
@@ -98,12 +107,13 @@ export async function openStored(id) {
   if (meta.format === 'epub' || meta.format === 'mobi') {
     const isMobi = meta.format === 'mobi';
     book = await (isMobi ? openMobi : openEpub)(blob);
-    if (meta.docLens && meta.docLens.length === book.docs.length && (!isMobi || (meta.keep && meta.tocRaw))) {
+    // rows saved before comic detection existed have comic === undefined: scan them once (the scan also measures images/text)
+    if (meta.docLens && meta.docLens.length === book.docs.length && (!isMobi || (meta.keep && meta.tocRaw)) && (isMobi || meta.comic !== undefined)) {
       book.layout(meta.docLens, meta.headings, meta.parts, isMobi ? { keep: meta.keep, tocRaw: meta.tocRaw } : undefined);
     } else {   // imported by an older build / changed file: rescan once
       await book.scan();
       meta.lens = book.lens;
-      Object.assign(meta, book.layoutData());
+      Object.assign(meta, book.layoutData(), comicMeta(book));
       await db.put('books', meta);
     }
   } else if (meta.format === 'txt') {

@@ -23,12 +23,15 @@ async function main() {
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', async () => applyTheme((await loadSettings()).theme));
   await syncMgr.load();
 
+  // anyway: an image-only book (comic epub) is read in this reader although the choice panel offered ImageViewer
+  const openBook = (id, { anyway = false } = {}) => { history.pushState({ fromShelf: true, anyway }, '', '#/read/' + encodeURIComponent(id)); route(); };
   const shelf = new ShelfView(shelfEl, {
-    open: (id) => { history.pushState({ fromShelf: true }, '', '#/read/' + encodeURIComponent(id)); route(); },
+    open: openBook,
     openSettings: () => openSettingsDialog({ onChange: () => shelf.render() }),
     installPrompt: async () => { if (!deferredInstall) return; deferredInstall.prompt(); await deferredInstall.userChoice.catch(() => {}); deferredInstall = null; shelf.setInstallable(false); },
   });
   const reader = new ReaderView(readerEl, {
+    readAnyway: (id) => openBook(id, { anyway: true }),
     goShelf: () => { if (history.state && history.state.fromShelf) history.back(); else { history.replaceState(null, '', '#/'); route(); } },
     onProgress: (info) => syncMgr.onProgress(info),
     fetchRemoteProgress: (bid) => syncMgr.fetchRemoteProgress(bid),
@@ -41,7 +44,7 @@ async function main() {
     if (r.name === 'read') {
       shelfEl.hidden = true;
       readerEl.hidden = false;
-      await reader.open(r.id);
+      await reader.open(r.id, { anyway: !!(history.state && history.state.anyway) });
     } else {
       reader.close();
       syncMgr.flush();
