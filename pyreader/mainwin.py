@@ -352,7 +352,10 @@ class MainWindow(QMainWindow):
         self.library_act.setMenu(self.library_menu)
         self.library_act.setToolTip("最近打开 / 本地书库目录 / 上传到远程书库")
         # 在线书源（OPDS）：独立对话框，见 booksourcedlg.py
-        tip(tb.addAction("📡", self.open_book_sources), "在线书源（OPDS / Gutenberg）：浏览、搜索、下载")
+        # 带文字：单个 emoji 在工具栏里不显眼；Ctrl+Shift+B 也可打开
+        self.booksrc_act = tb.addAction("📡 在线书库", self.open_book_sources)
+        self.booksrc_act.setToolTip("在线书库（Project Gutenberg / OPDS）：搜索并下载免费电子书  (Ctrl+Shift+B)")
+        self.booksrc_act.setShortcut("Ctrl+Shift+B")
         # ---- AI 辅助功能组 ----
         ai_menu = QMenu("AI 功能", self)
         ai_menu.addAction("📝 章节摘要", self._ai_summarize)
