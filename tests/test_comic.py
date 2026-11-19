@@ -699,3 +699,25 @@ def test_view_opens_epub_comic_in_spine_order_and_reports_opf_direction(tmp_path
     v.close_comic()
     assert v.opf_rtl() is None
     v.close()
+
+
+# ---- 超星 .pdg / .uvz ----
+def test_decode_pdg_variants():
+    jpg = b"\xff\xd8\xff\xe0" + b"x" * 40
+    assert cm.decode_pdg(jpg) == jpg                                  # 已是图片
+    assert cm.decode_pdg(b"HDR12345" + jpg) == jpg                    # 头部外壳
+    assert cm.decode_pdg(bytes(b ^ 0x5A for b in jpg)) == jpg         # 单字节 XOR
+    assert cm.decode_pdg(b"\x00" * 30) == b"\x00" * 30                # 认不出：原样
+
+
+def test_uvz_pdg_pages(tmp_path):
+    import zipfile
+    png = b"\x89PNG\r\n\x1a\n" + b"y" * 30
+    p = tmp_path / "book.uvz"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("000002.pdg", b"HD" + png)
+        z.writestr("000001.pdg", png)
+        z.writestr("bookinfo.dat", b"meta")
+    with cm.ComicArchive(str(p)) as a:
+        assert a.pages == ["000001.pdg", "000002.pdg"]
+        assert a.read("000002.pdg") == png
