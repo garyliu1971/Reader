@@ -16,8 +16,8 @@ import zipfile
 from urllib.parse import unquote
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp")
-COMIC_EXTS = (".zip", ".cbz")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".pdg")     # .pdg = 超星页图（外壳里是普通图片，read() 时还原）
+COMIC_EXTS = (".zip", ".cbz", ".uvz")
 MAX_ENTRY_SIZE = 64 * 1024 * 1024     # 单页解压后上限；声明的大小和实际读到的字节数都要过这一关
 MAX_ENTRIES = 20000                   # 压缩包条目数上限
 MIN_ZOOM, MAX_ZOOM = 0.02, 40.0
@@ -34,6 +34,32 @@ EPUB_PAGE_MAX_BYTES = 4 * 1024 * 1024  # 读一页 xhtml / OPF 的字节上限
 EPUB_PAGE_ORDER_MIN_COVERAGE = 0.5    # spine 引用到的图少于压缩包里图片的一半：引用关系读不出来，退回自然排序
 EPUB_MEMO_MAX = 256
 FIT_MODES = ("width", "height", "window")
+
+
+_IMG_MAGICS = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"II*\x00", b"MM\x00*", b"BM", b"RIFF")
+PDG_SCAN_BYTES = 64                   # 在文件头这么多字节内找图片魔数（找不到再试单字节 XOR）
+
+
+def _magic_at(data: bytes, off: int) -> bool:
+    for m in _IMG_MAGICS:
+        if data.startswith(m, off):
+            return m != b"RIFF" or data[off + 8:off + 12] == b"WEBP"
+    return False
+
+
+def decode_pdg(data: bytes) -> bytes:
+    """超星 .pdg 页图 -> 普通图片字节。已是图片：原样返回；魔数在头部几十字节内：去掉外壳；
+    整体被单字节 XOR 混淆：还原。都认不出来就原样返回（交给 QImage，失败会显示为坏页）。"""
+    if _magic_at(data, 0):
+        return data
+    for off in range(1, min(PDG_SCAN_BYTES, len(data))):
+        if _magic_at(data, off):
+            return data[off:]
+    if len(data) >= 16:
+        for key in range(1, 256):
+            if _magic_at(bytes(b ^ key for b in data[:16]), 0):
+                return data.translate(bytes(i ^ key for i in range(256)))
+    return data
 
 
 class ComicError(Exception):
@@ -374,7 +400,7 @@ class ComicArchive:
                 raise ComicError(f"读取失败（损坏或加密）：{entry}：{e}") from e
         if len(data) > MAX_ENTRY_SIZE:
             raise ComicError(f"页面过大：{entry}")
-        return data
+        return decode_pdg(data) if entry.lower().endswith(".pdg") else data
 
     def chapters(self) -> List[Chapter]:
         if self._flat:

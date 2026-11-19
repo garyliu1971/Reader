@@ -42,8 +42,8 @@ MEDIA_PROGRESS_KEYS = ("_progress_ms", "_progress_page", "_progress_pct_")     #
 READABLE_EXTS = (".txt", ".md", ".markdown", ".epub", ".html", ".htm", ".mobi",
                  ".azw", ".azw3", ".prc", ".pdf", ".docx", ".pptx")
 AUDIO_EXTS = (".mp3", ".m4a", ".m4b", ".aac", ".flac", ".ogg", ".opus", ".wav")
-ARCHIVE_EXTS = (".zip", ".cbz", ".cbr", ".7z", ".rar")
-COMIC_EXTS = (".zip", ".cbz")
+ARCHIVE_EXTS = (".zip", ".cbz", ".uvz", ".cbr", ".7z", ".rar")
+COMIC_EXTS = (".zip", ".cbz", ".uvz")
 INAPP_MEDIA_EXTS = AUDIO_EXTS + COMIC_EXTS
 EXTERNAL_EXTS = (".cbr", ".7z", ".rar")
 MEDIA_EXTS = INAPP_MEDIA_EXTS + EXTERNAL_EXTS
